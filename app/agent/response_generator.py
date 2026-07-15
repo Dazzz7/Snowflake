@@ -146,6 +146,9 @@ class ResponseGenerator:
                 "rank": plan.result_rank,
                 "threshold": plan.threshold_value,
                 "dimension": plan.dimension,
+                "llm_attempted": plan.llm_attempted,
+                "llm_succeeded": plan.llm_succeeded,
+                "llm_provider": plan.llm_provider,
             }
         if plan.metric.estimate_column:
             interpretation["source_column"] = plan.metric.estimate_column

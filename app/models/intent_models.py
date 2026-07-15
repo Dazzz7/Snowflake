@@ -32,3 +32,6 @@ class QueryIntent:
     needs_clarification: bool = False
     clarification_question: str | None = None
     unsupported_reason: str | None = None
+    llm_attempted: bool = False
+    llm_succeeded: bool = False
+    llm_provider: str | None = None

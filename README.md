@@ -2,7 +2,7 @@
 
 Interactive chat agent for answering natural-language questions grounded in the Snowflake Marketplace US Open Census dataset.
 
-The central design choice is that the LLM is used for language understanding and response wording, while metric definitions, geography mappings, SQL templates, permissions, and validation rules are controlled deterministically by the application.
+The central design choice is that Gemini is used for language understanding, while metric definitions, geography mappings, SQL templates, permissions, and validation rules are controlled deterministically by the application.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ Request flow:
 1. Conversation context resolver expands follow-ups like "What about Texas?" or "What about NYC?"
 2. Geography/entity resolver recognizes states plus verified city/county-set aliases such as NYC.
 3. Input scope guardrail rejects off-topic requests after context resolution.
-4. Intent parser extracts metric, geography level, selected entities, operation, limit, rank, thresholds, and breakdown dimension, with an optional hosted OpenAI-compatible LLM adapter as a fallback.
+4. Intent parser extracts metric, geography level, selected entities, operation, limit, rank, thresholds, and breakdown dimension, and records whether the hosted Gemini parser was attempted.
 5. Semantic catalog maps user language to verified direct, composite, derived-rate, median, and distribution metrics.
 6. Query planner builds a small, explicit plan.
 7. SQL templates generate read-only Snowflake SQL.
@@ -30,7 +30,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and fill in Snowflake credentials. The app has no demo-data mode; successful answers come from the configured Snowflake Census database. The required database is:
+Copy `.env.example` to `.env` and fill in Snowflake credentials plus `LLM_API_KEY` from Google AI Studio. The app has no demo-data mode; successful answers come from the configured Snowflake Census database. The required database is:
 
 ```text
 US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET
@@ -50,7 +50,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ## Public Deployment
 
-The app does not depend on local Ollama or any local model endpoint. `USE_LLM=false` is the default, so deployed environments use the deterministic catalog parser. To add a hosted reachable LLM, set `USE_LLM=true` plus an OpenAI-compatible `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` from a provider with a free tier.
+The app does not depend on local Ollama or any local model endpoint. Public deployment uses Gemini's OpenAI-compatible API:
+
+```text
+USE_LLM=true
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+LLM_MODEL=gemini-3.5-flash
+LLM_API_KEY=<Google AI Studio key>
+```
 
 Public deployment files are included:
 
@@ -135,10 +142,10 @@ The current tests cover:
 
 Deploy the Streamlit app or Docker image to a public host and set these environment variables:
 
-- `USE_LLM` (`false` by default)
-- `LLM_BASE_URL` (optional hosted OpenAI-compatible endpoint)
-- `LLM_API_KEY` (optional, depending on provider)
-- `LLM_MODEL` (optional hosted model name)
+- `USE_LLM` (`true` for public deployment)
+- `LLM_BASE_URL` (`https://generativelanguage.googleapis.com/v1beta/openai`)
+- `LLM_API_KEY` (Gemini API key from Google AI Studio)
+- `LLM_MODEL` (`gemini-3.5-flash`)
 - `SNOWFLAKE_ACCOUNT`
 - `SNOWFLAKE_USER`
 - `SNOWFLAKE_PASSWORD`
@@ -147,7 +154,7 @@ Deploy the Streamlit app or Docker image to a public host and set these environm
 - `SNOWFLAKE_DATABASE`
 - `SNOWFLAKE_SCHEMA`
 
-For production, use a read-only Snowflake role, a small dedicated warehouse, deployment secrets, and a hosted LLM endpoint only if you want LLM-assisted parsing beyond the deterministic catalog parser.
+For production, use a read-only Snowflake role, a small dedicated warehouse, deployment secrets, and the Gemini API key as a deployment secret.
 
 ## Known Limits
 

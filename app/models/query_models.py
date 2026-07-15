@@ -48,6 +48,9 @@ class QueryPlan:
     interpretation: str = ""
     sql: str | None = None
     parameters: dict = field(default_factory=dict)
+    llm_attempted: bool = False
+    llm_succeeded: bool = False
+    llm_provider: str | None = None
 
 
 @dataclass

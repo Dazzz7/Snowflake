@@ -45,6 +45,9 @@ class QueryPlanner:
                 order_by=[f"value {'ASC' if intent.sort_direction == 'ascending' else 'DESC'}"],
                 row_limit=row_limit,
                 interpretation=f"Rank states by {metric.display_name.lower()} in {metric.year}",
+                llm_attempted=intent.llm_attempted,
+                llm_succeeded=intent.llm_succeeded,
+                llm_provider=intent.llm_provider,
             )
             return plan, ValidationResult(True)
 
@@ -84,6 +87,9 @@ class QueryPlanner:
                 order_by=["value DESC"],
                 row_limit=100,
                 interpretation=f"{intent.geography_level.title()}s where {metric.display_name.lower()} is {intent.threshold_operator} {intent.threshold_value:,.0f}",
+                llm_attempted=intent.llm_attempted,
+                llm_succeeded=intent.llm_succeeded,
+                llm_provider=intent.llm_provider,
             )
             return plan, ValidationResult(True)
 
@@ -116,6 +122,9 @@ class QueryPlanner:
                 operation_type="breakdown",
                 dimension=intent.dimension,
                 interpretation=f"{intent.dimension.title()} breakdown for {filters[0]['name']} in {metric.year}",
+                llm_attempted=intent.llm_attempted,
+                llm_succeeded=intent.llm_succeeded,
+                llm_provider=intent.llm_provider,
             )
             return plan, ValidationResult(True)
 
@@ -130,5 +139,8 @@ class QueryPlanner:
             operation_type=intent.operation_type or ("comparison" if query_type == "comparison" else "aggregate"),
             dimension=intent.dimension or metric.dimension,
             interpretation=f"{metric.year} {metric.display_name.lower()} for {names}",
+            llm_attempted=intent.llm_attempted,
+            llm_succeeded=intent.llm_succeeded,
+            llm_provider=intent.llm_provider,
         )
         return plan, ValidationResult(True)

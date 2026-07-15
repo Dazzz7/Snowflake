@@ -31,7 +31,7 @@ class Settings:
 
     @property
     def has_hosted_llm_config(self) -> bool:
-        return self.use_llm and bool(self.llm_base_url and self.llm_model)
+        return self.use_llm and bool(self.llm_base_url and self.llm_model and self.llm_api_key)
 
     @property
     def has_snowflake_credentials(self) -> bool:

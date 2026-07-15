@@ -30,18 +30,25 @@ class IntentParser:
 
     def parse(self, question: str) -> QueryIntent:
         deterministic = self._parse_deterministically(question)
+        if self.llm:
+            deterministic.llm_attempted = True
+            deterministic.llm_provider = settings.llm_model
+            llm_intent = self._parse_with_llm(question)
+            if llm_intent:
+                deterministic.llm_succeeded = True
+                if deterministic.intent == "unsupported" and llm_intent.metric in load_metrics():
+                    deterministic.metric = llm_intent.metric
+                    deterministic.needs_clarification = bool(llm_intent.needs_clarification)
+                    deterministic.clarification_question = llm_intent.clarification_question
+                    deterministic.intent = (
+                        llm_intent.intent
+                        if llm_intent.intent in {"aggregate_metric", "comparison", "ranking"}
+                        else deterministic.intent
+                    )
         if deterministic.needs_clarification:
             return deterministic
         if not deterministic.needs_clarification and deterministic.intent != "unsupported":
             return deterministic
-        if not self.llm:
-            return deterministic
-        llm_intent = self._parse_with_llm(question)
-        if llm_intent and llm_intent.metric:
-            deterministic.metric = llm_intent.metric
-            deterministic.needs_clarification = False
-            deterministic.clarification_question = None
-            deterministic.intent = llm_intent.intent if llm_intent.intent in {"aggregate_metric", "comparison", "ranking"} else deterministic.intent
         return deterministic
 
     def _parse_with_llm(self, question: str) -> QueryIntent | None:

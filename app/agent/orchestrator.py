@@ -80,7 +80,12 @@ class CensusChatAgent:
             return AgentResponse(
                 answer=plan_validation.reason or "I could not construct a reliable Census query for that question.",
                 status="needs_clarification" if intent.needs_clarification else "unsupported",
-                interpretation={"resolved_question": resolved_question},
+                interpretation={
+                    "resolved_question": resolved_question,
+                    "llm_attempted": intent.llm_attempted,
+                    "llm_succeeded": intent.llm_succeeded,
+                    "llm_provider": intent.llm_provider,
+                },
             )
 
         plan = self.sql_generator.generate(plan)

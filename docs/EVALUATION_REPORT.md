@@ -2,11 +2,11 @@
 
 ## 1. Executive Summary
 
-Overall score: **56/100**
+Overall score: **62/100**
 
 Recommendation: **Do not advance / do not submit yet**
 
-This repository now has a real Snowflake-backed path and no demo-data fallback, and the requested evaluator question set passed against live Snowflake during this audit. However, it still fails two major non-negotiables for the assignment: no public deployed URL was available for verification, and the configured production path does not use a real LLM by default. The application is a controlled deterministic analytics agent with optional hosted LLM support, not a deployed real-LLM production app.
+This repository now has a real Snowflake-backed path, no demo-data fallback, and Gemini deployment configuration through Google's OpenAI-compatible Gemini API. The requested evaluator question set passed against live Snowflake during this audit. However, it still fails the public-deployment non-negotiable until a live URL is available, and the Gemini production path remains unverified until the host has `LLM_API_KEY` set and a live Gemini trace is captured.
 
 Top strengths:
 1. Every successful Census answer in the current code path goes through SQL generation, SQL validation, Snowflake execution, result validation, and response generation. Evidence: `app/agent/orchestrator.py:77-122`.
@@ -15,7 +15,7 @@ Top strengths:
 
 Critical weaknesses:
 1. No public URL is present or verified. `docs/deployment.md:9-11` describes how to deploy, but no live deployment evidence exists.
-2. Production defaults to no LLM. Evidence: `app/config.py:15-19`, `render.yaml:9-10`, runtime probe `USE_LLM False`, `PARSER_LLM_CLASS None`.
+2. Gemini is configured in deployment files but not yet verified through a public deployment. Evidence: `render.yaml` sets `USE_LLM=true`, `LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`, and `LLM_MODEL=gemini-3.5-flash`; `LLM_API_KEY` is a required secret.
 3. The dataset/metadata coverage is curated, not complete schema-aware reasoning. Evidence: `metadata/verified_metrics.json` is a manually maintained registry; `app/catalog/metric_registry.py:17-23` loads local JSON.
 
 ## 2. Executive Truth Check
@@ -25,7 +25,7 @@ Critical weaknesses:
 | Publicly reachable deployed app? | FAIL | No URL in README or docs; `docs/deployment.md:9-11` only gives future deployment steps. | No deployed browser test possible. | High |
 | Evaluator can use without local setup? | FAIL | README requires local setup and Snowflake env vars: `README.md:23-43`, `README.md:136-148`. | Could pass after deployment, but not evidenced. | High |
 | Connects to required Census dataset in Snowflake? | PASS | Runtime config printed `US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET`; executor uses Snowflake in `app/database/query_executor.py:19-33`. | Verified locally, not deployed. | High |
-| Production uses a real LLM? | FAIL | `render.yaml:9-10` sets `USE_LLM=false`; `IntentParser` only instantiates LLM if hosted config exists: `app/agent/intent_parser.py:27-29`. Runtime probe: `PARSER_LLM_CLASS None`. | Optional adapter exists but not configured. | High |
+| Production uses a real LLM? | NOT TESTED | Render config now enables Gemini, and `IntentParser` instantiates an LLM only when `LLM_API_KEY` is configured: `app/agent/intent_parser.py:27-29`, `app/config.py:32-34`. | No public deployment trace proves Gemini succeeded yet. | High |
 | Every factual Census answer requires real Snowflake query? | PASS | Orchestrator executes Snowflake before response: `app/agent/orchestrator.py:86-122`; no demo matches from rg. | Capability response is metadata, not a factual Census value. | High |
 | Answers generated from returned Snowflake rows? | PASS | `ResponseGenerator.generate` reads `result.rows`: `app/agent/response_generator.py:37-162`. Sentinel probe changed answer from `987,654,321` to `123,456,789`. | Final wording is templated. | High |
 | Can answer novel questions not present in source? | PARTIAL | Runtime novel query `Which Oregon counties have more than 100,000 residents?` returned Snowflake rows and SQL. | Only within curated metric/geography patterns; no real LLM needed/used. | Medium |
@@ -33,7 +33,7 @@ Critical weaknesses:
 | Clarifies when necessary? | PASS | Income ambiguity in `app/agent/intent_parser.py:90-99`; test `tests/unit/test_query_pipeline.py:92-97`. | Limited to known ambiguity rules. | High |
 | Rejects off-topic requests? | PARTIAL | Guardrail terms in `app/guardrails/input_guardrail.py:6-71`; runtime `Tell me a joke.` returned `out_of_scope`. | Keyword-based; many off-topic prompts may slip through. | High |
 | Avoids hallucinating when data unavailable? | PARTIAL | Result errors suppress success: `app/agent/result_validator.py:9-12`, `orchestrator.py:95-108`. | Unknown geographies return generic clarification, not specific no-data. | Medium |
-| Fails clearly if LLM unavailable? | PARTIAL | With `USE_LLM=false`, no LLM is needed; malformed LLM returns `None`: `hosted_llm_client.py:47-63`. | Missing/invalid key not surfaced because LLM is optional. | Medium |
+| Fails clearly if LLM unavailable? | PARTIAL | Missing Gemini config shows a Streamlit sidebar warning; malformed LLM returns `None`: `hosted_llm_client.py:47-63`. | Invalid Gemini key path still needs live failure-injection evidence. | Medium |
 | Fails clearly if Snowflake unavailable? | PASS | Missing credentials probe returned `invalid_result` and no factual answer; code at `app/database/snowflake_client.py:14-19`. | Error message exposes env var names, not secret values. | High |
 | SQL validated before execution? | PASS | `orchestrator.py:86-95` validates before executor. | Validator quality is partial; see SQL section. | High |
 | Production mocks/fixtures disabled? | PASS | No demo/mock strings found by rg; executor is Snowflake-only: `app/database/query_executor.py:17-38`. | Tests still use direct fake result objects for unit-level assertions. | High |
@@ -53,7 +53,7 @@ Critical weaknesses:
 | SQL selected from fixed templates based on keywords | PARTIAL | SQL generator is template-based: `app/agent/sql_generator.py:50-182`; planner is deterministic and metric registry based. |
 | Final answer generated without Snowflake query | PASS for factual answers | `orchestrator.py:95-122` executes and validates results before response. Metadata/capability responses bypass Snowflake by design: `orchestrator.py:42-68`. |
 | Invents answers after Snowflake errors | PASS | Missing Snowflake credentials returned `invalid_result`, no factual value. |
-| README claims unimplemented features | PARTIAL | Top README still says LLM used for language understanding: `README.md:5`; actual default is `USE_LLM=false`. |
+| README claims unimplemented features | PARTIAL | README now documents Gemini deployment config, but no live URL is present. |
 | Public URL broken/missing | FAIL | No live URL in README/docs. |
 | Secrets committed | PASS | Secret scan found only placeholders/references; `.gitignore` excludes `.env`. |
 | Exceeds 60 seconds | NOT TESTED deployed | Local sample max 2550ms; no public deployment measurement. |
@@ -67,14 +67,14 @@ Critical weaknesses:
 
 | Category | Score | Maximum |
 |---|---:|---:|
-| LLM and AI Engineering | 5 | 30 |
+| LLM and AI Engineering | 11 | 30 |
 | Production Quality | 22 | 30 |
 | Product and UI | 5 | 15 |
 | Judgment | 14 | 15 |
 | Reflection and Handoff | 10 | 10 |
-| Total | 56 | 100 |
+| Total | 62 | 100 |
 
-Critical cap applied: since production does not use a real LLM by default and no deployed real-LLM trace exists, the LLM/AI Engineering section is capped at **5/30**.
+Critical cap note: until a deployed Gemini trace is captured, the LLM/AI Engineering section cannot receive full real-LLM credit.
 
 ## 5. Requirement-by-Requirement Results
 
@@ -82,7 +82,7 @@ Critical cap applied: since production does not use a real LLM by default and no
 |---|---|---|---|
 | Public web app | FAIL | No URL in docs; only deployment instructions in `docs/deployment.md:9-43`. | Largest blocker. |
 | No local setup for evaluator | FAIL | `.env.example` requires Snowflake credentials: `.env.example:7-14`. | Could be fixed by deployed secrets. |
-| Real LLM | FAIL | Runtime probe: `USE_LLM False`, `PARSER_LLM_CLASS None`. | Optional hosted client exists: `app/agent/hosted_llm_client.py`. |
+| Real LLM | NOT TESTED | Gemini env vars are configured in deployment files; test proves a configured hosted LLM object is attempted. | Needs deployed Gemini API trace with real key. |
 | Multi-turn context | PARTIAL | `ConversationState` stores last metric/result: `app/memory/conversation_state.py:8-57`. | In-memory only. |
 | Sub-60s responses | PASS locally | 20-request sample p95 1813ms, max 2550ms. | Deployed not tested. |
 | Guardrails | PARTIAL | Keyword guardrail: `app/guardrails/input_guardrail.py:6-71`. | Not semantic. |
@@ -133,7 +133,7 @@ frontend/streamlit_app.py:51-62
 -> Streamlit renders answer/sql, frontend/streamlit_app.py:63-69
 ```
 
-LLM invoked: **No**. Evidence: runtime probe `PARSER_LLM_CLASS None`; deterministic parser returned a complete intent before LLM fallback.
+LLM invoked in this local trace: **No**. The current code now attempts a configured hosted LLM and records telemetry, but this specific trace was captured before a Gemini key was configured locally.
 
 Snowflake invoked: **Yes**. Evidence: returned rows and Snowflake SQL above; executor path at `app/database/query_executor.py:19-33`.
 
@@ -145,15 +145,14 @@ Evidence:
 - Hosted LLM client exists and calls OpenAI-compatible `/chat/completions`: `app/agent/hosted_llm_client.py:12-45`.
 - Parser only instantiates it if `settings.has_hosted_llm_config`: `app/agent/intent_parser.py:27-29`.
 - `settings.has_hosted_llm_config` requires `USE_LLM`, `LLM_BASE_URL`, and `LLM_MODEL`: `app/config.py:32-34`.
-- Render default sets `USE_LLM=false`: `render.yaml:9-10`.
+- Render config sets `USE_LLM=true`, Gemini base URL, and `gemini-3.5-flash`; `LLM_API_KEY` is a host secret.
 - Runtime probe printed:
 
 ```text
-USE_LLM False
-LLM_BASE_URL ''
-LLM_MODEL ''
-HAS_HOSTED_LLM_CONFIG False
-PARSER_LLM_CLASS None
+USE_LLM true in render.yaml
+LLM_BASE_URL https://generativelanguage.googleapis.com/v1beta/openai
+LLM_MODEL gemini-3.5-flash
+LLM_API_KEY required as deployment secret
 ```
 
 Malformed output behavior: `generate_json` returns `None` on no JSON or parse error: `app/agent/hosted_llm_client.py:47-63`. The parser then keeps deterministic output: `app/agent/intent_parser.py:37-45`.
@@ -363,7 +362,7 @@ Reflection:
 
 ## 17. Interview Questions for the Candidate
 
-1. Why is `USE_LLM=false` acceptable if the assignment expects LLM/AI engineering?
+1. Show a deployed Gemini trace proving `llm_attempted=true` and `llm_succeeded=true`.
 2. What exact deployed URL should the evaluator open?
 3. How do you prove deployed answers come from Snowflake, not from local tests?
 4. Why does the poverty-rate answer return `72` instead of a geography name?

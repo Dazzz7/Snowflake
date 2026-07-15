@@ -1,6 +1,6 @@
 # Public Deployment
 
-The app has no demo-data mode and no local-model dependency. Public deployments must be configured with Snowflake credentials. `USE_LLM=false` is the default, so the deterministic catalog parser works without any LLM service.
+The app has no demo-data mode and no local-model dependency. Public deployments must be configured with Snowflake credentials and a Gemini API key. Gemini is used through Google's OpenAI-compatible Gemini API endpoint.
 
 ## Render
 
@@ -11,7 +11,11 @@ This repo includes `render.yaml`.
 3. Set the required Snowflake variables as Render secrets/environment variables:
 
 ```text
-USE_LLM=false
+USE_LLM=true
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+LLM_API_KEY=...
+LLM_MODEL=gemini-3.5-flash
+LLM_TIMEOUT_SECONDS=20
 QUERY_TIMEOUT_SECONDS=30
 SNOWFLAKE_ACCOUNT=...
 SNOWFLAKE_USER=...
@@ -22,15 +26,7 @@ SNOWFLAKE_DATABASE=US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET
 SNOWFLAKE_SCHEMA=PUBLIC
 ```
 
-4. Optional hosted LLM parsing:
-
-```text
-USE_LLM=true
-LLM_BASE_URL=https://your-openai-compatible-provider.example/v1
-LLM_API_KEY=...
-LLM_MODEL=...
-LLM_TIMEOUT_SECONDS=20
-```
+4. Get the Gemini key from Google AI Studio and store it as `LLM_API_KEY` in the deployment environment, never in git.
 
 ## Streamlit Community Cloud
 
