@@ -29,11 +29,16 @@ class IntentParser:
         self.llm = llm if llm is not None else (HostedLLMClient() if settings.has_hosted_llm_config else None)
 
     def parse(self, question: str) -> QueryIntent:
-        deterministic = self._parse_deterministically(question)
+        rewritten_question = None
+        if self.llm:
+            rewritten_question = self._rewrite_with_llm(question)
+        deterministic = self._parse_deterministically(rewritten_question or question)
         if self.llm:
             deterministic.llm_attempted = True
             deterministic.llm_provider = settings.llm_model
-            llm_intent = self._parse_with_llm(question)
+            if rewritten_question:
+                deterministic.llm_succeeded = True
+            llm_intent = None if rewritten_question and not deterministic.needs_clarification else self._parse_with_llm(question)
             if llm_intent:
                 deterministic.llm_succeeded = True
                 if deterministic.intent == "unsupported" and llm_intent.metric in load_metrics():
@@ -50,6 +55,29 @@ class IntentParser:
         if not deterministic.needs_clarification and deterministic.intent != "unsupported":
             return deterministic
         return deterministic
+
+    def _rewrite_with_llm(self, question: str) -> str | None:
+        if not self.llm:
+            return None
+        system = (
+            "Rewrite the user's Census analytics question as one clear, literal question. "
+            "Preserve all named geographies, metric words, age ranges, thresholds, ranking direction, and requested limits. "
+            "Do not answer the question. Do not add facts. Return strict JSON only."
+        )
+        payload = self.llm.generate_json(
+            system,
+            (
+                f"Question: {question}\n"
+                'Return keys: rewritten_question. Example: "Which state has the less people age 55 and older?" '
+                '=> "Which state has the fewest people age 55 and older?"'
+            ),
+        )
+        if not payload:
+            return None
+        rewritten = str(payload.get("rewritten_question") or "").strip()
+        if not rewritten or len(rewritten) > 300:
+            return None
+        return rewritten
 
     def _parse_with_llm(self, question: str) -> QueryIntent | None:
         allowed_metrics = ", ".join(sorted(load_metrics()))
@@ -141,10 +169,29 @@ class IntentParser:
             intent = "ranking"
             operation_type = "rank"
             limit = rank
-        elif any(term in lowered for term in ["top", "largest", "highest", "rank", "higher", "most", "lowest", "smallest", "more no", "more number"]):
+        elif any(
+            term in lowered
+            for term in [
+                "top",
+                "largest",
+                "highest",
+                "rank",
+                "higher",
+                "most",
+                "lowest",
+                "smallest",
+                "least",
+                "fewest",
+                "less people",
+                "fewer people",
+                "lower",
+                "more no",
+                "more number",
+            ]
+        ):
             intent = "ranking"
             operation_type = "maximum"
-            if any(term in lowered for term in ["lowest", "smallest"]):
+            if any(term in lowered for term in ["lowest", "smallest", "least", "fewest", "less people", "fewer people", "lower"]):
                 sort_direction = "ascending"
                 operation_type = "minimum"
             limit = limit or 1

@@ -9,9 +9,7 @@ class FakeHostedLLM:
     def generate_json(self, system: str, user: str) -> dict:
         self.calls += 1
         return {
-            "intent": "ranking",
-            "metric": "total_population",
-            "needs_clarification": False,
+            "rewritten_question": "Which state has the highest population?",
         }
 
 

@@ -104,6 +104,18 @@ def test_people_over_55_state_ranking_uses_dynamic_age_range():
     assert "B01001e3" not in plan.sql
 
 
+def test_less_people_over_55_is_lowest_state_ranking():
+    intent = IntentParser().parse("Which state has the less people age 55 and older")
+    plan, validation = QueryPlanner().create_plan(intent)
+    assert validation.is_valid
+    assert plan is not None
+    assert plan.query_type == "ranking"
+    assert plan.geography_level == "state"
+    assert plan.sort_direction == "ascending"
+    assert plan.metric.metric_id == "population_by_age"
+    assert plan.age_min == 55
+
+
 def test_age_percentage_uses_dynamic_denominator():
     intent = IntentParser().parse("What percentage of Florida residents are over 55?")
     plan, validation = QueryPlanner().create_plan(intent)
