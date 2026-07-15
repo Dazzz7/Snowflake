@@ -17,10 +17,11 @@ Request flow:
 5. The app retrieves metadata from Snowflake and compactly describes approved tables.
 6. The app resolves geography such as California or Texas to verified FIPS filters.
 7. The LLM generates one read-only Snowflake SQL query.
-8. The app normalizes Snowflake identifiers, validates the SQL, and blocks unsafe or out-of-scope queries.
-9. Snowflake executes the query with a timeout and query tag.
-10. The LLM generates the final answer only from returned Snowflake rows.
-11. The UI shows the answer, interpretation, evidence, and SQL.
+8. If the hosted LLM is rate-limited or returns empty SQL, the app can build a conservative fallback query from the retrieved metadata for common aggregate, threshold, land, and per-person requests.
+9. The app normalizes Snowflake identifiers, validates the SQL, and blocks unsafe or out-of-scope queries.
+10. Snowflake executes the query with a timeout and query tag.
+11. The LLM generates the final answer only from returned Snowflake rows; if that fails, the app renders a deterministic row-based answer.
+12. The UI shows the answer, interpretation, evidence, and SQL.
 
 ## Local Setup
 
@@ -84,6 +85,13 @@ The current runtime does not send the entire Snowflake schema to the LLM. Instea
 
 For example, a question about rental units retrieves renter-occupied housing-unit metadata such as tenure variables, while a population question retrieves population variables. The LLM writes SQL only from the metadata candidate set supplied by the application.
 
+The app also has metadata-derived fallback planning for simple cases when the hosted LLM is rate-limited. Examples include:
+
+- `What is the US population?` -> retrieve total-population metadata and sum the selected estimate.
+- `Which Census Block Groups have over 100 rental units?` -> retrieve renter-occupied housing-unit metadata and apply a threshold.
+- `top 10 states by land volume` -> retrieve `AMOUNT_LAND`, aggregate by state FIPS, and rank descending.
+- `give me land per person in every state of usa` -> retrieve land metadata plus total-population metadata and compute `SUM(AMOUNT_LAND) / SUM(total population)` by state.
+
 Additional catalog artifacts:
 
 - `metadata/taxonomy.json` describes Census topic categories.
@@ -105,6 +113,8 @@ Examples:
 - `Which state has more no. of people greater than 65 age?` -> ranks states by the composite `population_65_plus` metric.
 - `Which Census Block Groups have over 100 rental units?` -> retrieves renter-occupied housing-unit metadata and queries matching block groups.
 - `Which state has the highest median household income?` -> retrieves income metadata and lets SQL validation enforce the retrieved candidate fields.
+- `top 10 states by land volume` -> aggregates land area by state.
+- `give me land per person in every state of usa` -> combines land area and population metadata to compute a derived per-person measure.
 - `Which state will have the highest population in 2040?` -> refused because the catalog contains historical data, not forecasts.
 
 ## Testing
@@ -125,6 +135,8 @@ The current tests cover:
 - Out-of-scope refusals.
 - Snowflake identifier normalization.
 - Metadata search helpers.
+- Metadata-derived fallback SQL for provider rate limits.
+- Land-area and land-per-person fallback queries.
 - Geography lookup and enrichment.
 - Public-mode hosted LLM configuration.
 - Golden question behavior where Snowflake and hosted LLM credentials are available.
@@ -135,7 +147,7 @@ The current tests cover:
 
 I started by building a curated metric assistant, then tried a very broad LLM-driven version. The broad version was flexible, but it could hallucinate columns or use the wrong Census universe. The final design keeps broad Census coverage while avoiding full-schema prompting: the app retrieves only question-relevant metadata from Snowflake and turns that retrieved candidate set into the SQL allowlist for that request.
 
-The main architecture decision was to let the LLM do language-heavy work while the application controls the data boundary. Groq-hosted `openai/gpt-oss-120b` handles scope detection, metadata search planning, SQL generation, and answer generation. The app retrieves Snowflake metadata, restricts SQL to the retrieved tables and columns, normalizes Snowflake identifiers, validates SQL, executes the query, and shows the evidence and SQL in the UI. This gives the model enough flexibility to answer varied questions without giving it unrestricted warehouse access.
+The main architecture decision was to let the LLM do language-heavy work while the application controls the data boundary. Groq-hosted `openai/gpt-oss-120b` handles scope detection, metadata search planning, SQL generation, and answer generation when available. The app retrieves Snowflake metadata, restricts SQL to the retrieved tables and columns, normalizes Snowflake identifiers, validates SQL, executes the query, and shows the evidence and SQL in the UI. For common aggregate and derived questions, the app can also build conservative SQL from retrieved metadata when the LLM is rate-limited.
 
 I also removed demo-data mode so the public app only answers from Snowflake. The frontend is Streamlit for speed and transparency, hosted publicly on Render, with a Snowflake-inspired interface so reviewers can immediately see the product direction.
 
@@ -147,13 +159,13 @@ The next data improvement would be to make the metadata retrieval layer more sem
 
 ### Edge Cases and Failure Modes
 
-Key failure modes identified include LLM rate limits, malformed JSON from the model, oversized metadata prompts, Snowflake quoting errors, missing or ambiguous geography, unsupported future-looking questions, and user requests outside the approved Census scope. The app handles many of these with retries, compacted metadata, identifier normalization, SQL validation, timeouts, and refusal paths.
+Key failure modes identified include LLM rate limits, malformed JSON from the model, oversized metadata prompts, Snowflake quoting errors, missing or ambiguous geography, unsupported future-looking questions, and user requests outside the Census dataset. The app handles many of these with retries, compacted metadata, identifier normalization, SQL validation, timeouts, refusal paths, and metadata-derived fallback SQL for common questions.
 
 Some edge cases are not fully solved yet. Multi-worker deployments would lose conversation context because memory is local to the process. Very complex geography requests, joins across new Census domains, and questions requiring non-additive statistics need stronger semantic contracts before they should be supported.
 
 ### Testing Approach and Future Test Additions
 
-The test suite focuses on the parts most likely to cause incorrect answers: scope handling, geography resolution, SQL safety, identifier normalization, metadata helpers, metadata ranking, and the LLM-agent flow. I also ran live smoke tests against Groq and Snowflake for population, housing/rental-unit metadata, and out-of-scope/rate-limit behavior.
+The test suite focuses on the parts most likely to cause incorrect answers: scope handling, geography resolution, SQL safety, identifier normalization, metadata helpers, metadata ranking, fallback SQL generation, and the LLM-agent flow. I also ran live smoke tests against Groq and Snowflake for population, housing/rental-unit metadata, land-area ranking, land-per-person calculations, and out-of-scope/rate-limit behavior.
 
 With more time, I would add deployed end-to-end tests that run against the public Render app, latency tests for the 60-second requirement, failure-injection tests for Snowflake and Groq outages, more adversarial prompt-injection cases, and a larger golden set covering follow-up questions and geography variations.
 
@@ -177,6 +189,6 @@ For production, use a read-only Snowflake role, a small dedicated warehouse, dep
 
 ## Known Limits
 
-This implementation retrieves question-specific Census metadata instead of sending the whole schema to the LLM. The main limitation is that lexical metadata search can still miss the best field or rank a related field too highly, so production should use stronger semantic search, more metadata reranking rules, and SQL AST validation.
+This implementation retrieves question-specific Census metadata instead of sending the whole schema to the LLM. The main limitation is that lexical metadata search can still miss the best field or rank a related field too highly, so production should use stronger semantic search, more metadata reranking rules, and SQL AST validation. Fallback answers are intentionally conservative and can be more utilitarian than LLM-written responses.
 
 Next improvements would include automatic table-grain discovery, county and tract geographies, duplicate-grain preflight checks, semantic metadata embeddings, and deployed end-to-end latency tests against the final hosting environment.
