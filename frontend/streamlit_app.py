@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import sys
 import uuid
+from pathlib import Path
 
 import streamlit as st
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from app.agent.orchestrator import CensusChatAgent
 from app.config import settings
