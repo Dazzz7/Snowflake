@@ -8,7 +8,7 @@ from app.agent.response_generator import ResponseGenerator
 from app.agent.result_validator import ResultValidator
 from app.agent.sql_generator import SQLGenerator
 from app.agent.sql_validator import SQLValidator
-from app.catalog.metric_registry import load_metrics, load_taxonomy
+from app.catalog.metric_registry import load_metrics, load_taxonomy, resolve_metric
 from app.catalog.catalog_search import summarize_schema_matches
 from app.database.query_executor import SnowflakeQueryExecutor
 from app.database.schema_loader import search_columns_metadata
@@ -275,6 +275,19 @@ class CensusChatAgent:
     def _should_try_dynamic_semantic_first(self, question: str) -> bool:
         lowered = question.lower()
         dynamic_terms = [
+            "veteran",
+            "veterans",
+            "military",
+            "without internet",
+            "internet access",
+            "broadband",
+            "snap",
+            "food stamp",
+            "uninsured",
+            "insurance",
+            "employment",
+            "occupation",
+            "occupations",
             "raw visit",
             "visitor count",
             "visit count",
@@ -286,7 +299,10 @@ class CensusChatAgent:
             "popularity by",
             "amount land",
         ]
-        return any(term in lowered for term in dynamic_terms)
+        if not any(term in lowered for term in dynamic_terms):
+            return False
+        resolved_metric = resolve_metric(lowered)
+        return resolved_metric is None or resolved_metric.metric_id == "total_population"
 
     def _is_geography_correction(self, question: str) -> bool:
         lowered = question.lower().strip(" .")

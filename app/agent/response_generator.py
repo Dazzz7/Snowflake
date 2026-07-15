@@ -229,6 +229,11 @@ class ResponseGenerator:
             }
         if plan.metric.estimate_column:
             interpretation["source_column"] = plan.metric.estimate_column
+        if plan.metric.metric_id.startswith("dynamic_"):
+            interpretation["metadata_discovery"] = True
+            interpretation["metric_definition"] = plan.metric.description
+            interpretation["universe"] = plan.metric.universe
+            answer += f" In this dataset, the selected measure is defined as: {plan.metric.description}. Universe: {plan.metric.universe}."
         if plan.metric.measure_type == "median":
             interpretation["aggregation_note"] = (
                 "This uses the configured block-group median-income field as a proxy. "

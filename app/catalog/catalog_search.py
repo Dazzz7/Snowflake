@@ -8,22 +8,47 @@ from app.models.query_models import MetricDefinition
 
 STOPWORDS = {
     "about",
+    "and",
     "answer",
+    "are",
     "available",
+    "between",
+    "california",
     "columns",
+    "compare",
+    "compared",
+    "counties",
+    "county",
     "data",
     "dataset",
     "field",
     "fields",
+    "florida",
     "have",
+    "highest",
+    "least",
+    "lowest",
     "kind",
     "metadata",
+    "most",
+    "people",
+    "population",
+    "percent",
+    "percentage",
+    "rate",
+    "resident",
+    "residents",
     "show",
+    "state",
+    "states",
     "table",
     "tables",
+    "texas",
+    "the",
     "what",
     "which",
     "with",
+    "you",
 }
 
 
@@ -34,10 +59,17 @@ def search_metric_catalog(text: str) -> MetricDefinition | None:
 def schema_search_terms(text: str) -> list[str]:
     terms = []
     for token in re.findall(r"[a-zA-Z0-9_]+", text.lower()):
-        if len(token) < 3 or token in STOPWORDS:
+        if token in STOPWORDS:
+            continue
+        normalized = token
+        if len(token) > 3 and token.endswith("s") and not token.endswith(("as", "is", "ss", "us")):
+            normalized = token[:-1]
+        if len(normalized) < 3 or normalized in STOPWORDS:
             continue
         if token not in terms:
             terms.append(token)
+        if normalized != token and normalized not in terms:
+            terms.append(normalized)
     return terms[:8]
 
 
