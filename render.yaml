@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: us-census-data-assistant
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run frontend/streamlit_app.py --server.address=0.0.0.0 --server.port=$PORT --server.headless=true
+    envVars:
+      - key: USE_LLM
+        value: "false"
+      - key: QUERY_TIMEOUT_SECONDS
+        value: "30"
+      - key: SNOWFLAKE_DATABASE
+        value: US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET
+      - key: SNOWFLAKE_SCHEMA
+        value: PUBLIC

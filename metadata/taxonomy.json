@@ -1,0 +1,31 @@
+{
+  "demographics": {
+    "description": "Population, age, sex, race, ethnicity, ancestry, and household relationships",
+    "subcategories": ["total_population", "age", "sex", "race", "ethnicity", "ancestry", "household_relationship"]
+  },
+  "socioeconomics": {
+    "description": "Income, poverty, employment, occupation, and educational attainment",
+    "subcategories": ["household_income", "per_capita_income", "poverty", "employment", "unemployment", "occupation", "education"]
+  },
+  "housing": {
+    "description": "Housing units, occupancy, tenure, rent, home value, rooms, year built, and household size",
+    "subcategories": ["housing_units", "occupancy", "tenure", "rent", "home_value", "rooms", "year_built", "household_size"]
+  },
+  "public_assistance": {
+    "description": "SNAP and other household assistance indicators",
+    "subcategories": ["snap", "food_stamps"]
+  },
+  "technology": {
+    "description": "Computer ownership, internet subscription, and broadband access",
+    "subcategories": ["computer_access", "internet_subscription", "broadband_access"]
+  },
+  "health": {
+    "description": "Health insurance coverage and uninsured population indicators",
+    "subcategories": ["health_insurance", "uninsured_population"]
+  },
+  "geography": {
+    "description": "State, county, city/place, tract, and Census Block Group identifiers",
+    "subcategories": ["state", "county", "city", "tract", "block_group"]
+  }
+}
+

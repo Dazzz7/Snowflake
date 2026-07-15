@@ -1,0 +1,7 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+streamlit==1.47.0
+snowflake-connector-python==3.16.0
+python-dotenv==1.2.2
+pytest==8.4.1
+python-dotenv==1.2.2

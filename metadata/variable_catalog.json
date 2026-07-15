@@ -1,0 +1,44 @@
+[
+  {
+    "variable_id": "B01003e1",
+    "table_name": "2020_CBG_B01",
+    "concept": "Total population",
+    "label": "Estimate: Total",
+    "universe": "Total population",
+    "year": 2020,
+    "measure_type": "count",
+    "estimate_or_moe": "estimate",
+    "additive": true,
+    "category": "demographics",
+    "subcategory": "total_population",
+    "synonyms": ["population", "residents", "people"]
+  },
+  {
+    "variable_id": "B01001e20",
+    "table_name": "2020_CBG_B01",
+    "concept": "Sex by age",
+    "label": "Estimate: Male: 65 and 66 years",
+    "universe": "Total population",
+    "year": 2020,
+    "measure_type": "count",
+    "estimate_or_moe": "estimate",
+    "additive": true,
+    "category": "demographics",
+    "subcategory": "age",
+    "synonyms": ["senior population", "older adults", "age 65 plus"]
+  },
+  {
+    "variable_id": "B19013e1",
+    "table_name": "2020_CBG_B19",
+    "concept": "Median household income",
+    "label": "Estimate: Median household income in the past 12 months",
+    "universe": "Households",
+    "year": 2020,
+    "measure_type": "median",
+    "estimate_or_moe": "estimate",
+    "additive": false,
+    "category": "socioeconomics",
+    "subcategory": "household_income",
+    "synonyms": ["median income", "household income"]
+  }
+]

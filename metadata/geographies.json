@@ -1,0 +1,10 @@
+{
+  "New York City": {
+    "aliases": ["NYC", "New York City", "the five boroughs"],
+    "geography_type": "city",
+    "parent": "New York",
+    "aggregation_method": "county_set",
+    "county_fips": ["36005", "36047", "36061", "36081", "36085"]
+  }
+}
+
