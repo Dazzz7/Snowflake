@@ -16,6 +16,16 @@ class QueueLLM:
         return self.text
 
 
+class FailingLLM:
+    last_error = "LLM HTTP error 429."
+
+    def generate_json(self, system, user):
+        return None
+
+    def generate_text(self, system, user):
+        return None
+
+
 def test_narrow_agent_requires_llm():
     response = NarrowLLMCensusAgent(llm=None).answer("What is the US population?", "no-llm-test")
 
@@ -96,3 +106,42 @@ WHERE LEFT(CENSUS_BLOCK_GROUP, 2) = %(state_fips)s
     assert '"B02001e1"' in normalized
     assert '"CENSUS_BLOCK_GROUP"' in normalized
     assert '"US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET"."PUBLIC"."2020_CBG_B02"' in normalized
+
+
+def test_llm_rate_limit_falls_back_to_metadata_sql(monkeypatch):
+    monkeypatch.setattr(
+        "app.agent.narrow_llm_agent.search_metadata",
+        lambda query, top_k=30: {
+            "results": [
+                {
+                    "table_name": "2020_CBG_B01",
+                    "column_name": "B01003e1",
+                    "label": "Estimate: TOTAL POPULATION: Total population: Total",
+                    "universe": "Total population",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "app.agent.narrow_llm_agent.describe_table",
+        lambda table: {
+            "table_name": table,
+            "columns": [
+                {"column_name": "CENSUS_BLOCK_GROUP", "label": "Census Block Group identifier"},
+                {"column_name": "B01003e1", "label": "Estimate: TOTAL POPULATION: Total population: Total"},
+            ],
+        },
+    )
+    monkeypatch.setattr("app.agent.narrow_llm_agent.lookup_geography", lambda query: {"resolved": True, "name": "United States", "type": "country"})
+    monkeypatch.setattr(
+        "app.agent.narrow_llm_agent.execute_sql",
+        lambda sql, parameters=None: QueryResult(rows=[{"B01003E1": 331449281}], columns=["B01003E1"], query_id="q-rate-limit"),
+    )
+
+    response = NarrowLLMCensusAgent(llm=FailingLLM()).answer("What is the US population?", "rate-limit-fallback")
+
+    assert response.status == "success"
+    assert "331,449,281" in response.answer
+    assert response.interpretation["scope_decision"]["llm_scope_fallback"] is True
+    assert response.interpretation["sql_payload"]["fallback"] is True
+    assert 'SUM("B01003e1")' in response.sql

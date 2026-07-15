@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.agent.hosted_llm_client import HostedLLMClient
@@ -39,17 +40,7 @@ class NarrowLLMCensusAgent:
         context = self._conversation_context(state)
         scope = self._scope_question(question, context)
         if scope.get("_llm_failed"):
-            return AgentResponse(
-                answer="The hosted LLM could not process the question right now. Please try again after the provider rate limit resets.",
-                status="llm_unavailable",
-                interpretation={
-                    "llm_attempted": True,
-                    "llm_succeeded": False,
-                    "llm_provider": settings.llm_model,
-                    "scope_decision": scope,
-                    "llm_last_error": getattr(self.llm, "last_error", None),
-                },
-            )
+            scope = self._fallback_scope(question, context, scope)
         if not scope.get("in_scope"):
             return AgentResponse(
                 answer=OUT_OF_SCOPE_ANSWER,
@@ -108,6 +99,10 @@ class NarrowLLMCensusAgent:
                 geography=geography,
                 retry_feedback=validation.reason,
             )
+            sql = enforce_row_limit(normalize_snowflake_identifiers(str(sql_payload.get("sql") or "").strip(), approved_tables, approved_columns))
+            validation = validate_narrow_sql(sql, approved_tables, approved_columns)
+        if not validation.is_valid and getattr(self.llm, "last_error", None):
+            sql_payload = self._fallback_sql_payload(resolved_question, scope, metadata, geography)
             sql = enforce_row_limit(normalize_snowflake_identifiers(str(sql_payload.get("sql") or "").strip(), approved_tables, approved_columns))
             validation = validate_narrow_sql(sql, approved_tables, approved_columns)
         if not validation.is_valid:
@@ -305,14 +300,19 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
         generated = self.llm.generate_text(system, json.dumps(user, default=str))
         if generated:
             return generated
-        return self._fallback_answer(resolved_question, rows)
+        return self._fallback_answer(resolved_question, rows, sql_payload)
 
-    def _fallback_answer(self, resolved_question: str, rows: list[dict[str, Any]]) -> str:
+    def _fallback_answer(self, resolved_question: str, rows: list[dict[str, Any]], sql_payload: dict[str, Any] | None = None) -> str:
         if not rows:
             return "The Snowflake query completed, but it returned no rows for this Census question."
 
         first_row = rows[0]
         if len(rows) == 1:
+            if len(first_row) == 1:
+                value = next(iter(first_row.values()))
+                label = (sql_payload or {}).get("metadata_label")
+                label_text = f" The selected Census measure was: {label}." if label else ""
+                return f"Using the available 2020 Census data for '{resolved_question}', the result is {self._format_value(value)}.{label_text}"
             values = ", ".join(
                 f"{str(key).replace('_', ' ')} = {self._format_value(value)}"
                 for key, value in first_row.items()
@@ -381,6 +381,140 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
             "queries": queries,
             "error": "; ".join(errors) if errors else None,
         }
+
+    def _fallback_scope(self, question: str, context: dict[str, Any], failed_scope: dict[str, Any]) -> dict[str, Any]:
+        lowered = question.lower()
+        clearly_off_topic = any(term in lowered for term in ["weather", "stock price", "sports", "recipe", "movie"])
+        if clearly_off_topic:
+            return {
+                "in_scope": False,
+                "resolved_question": question,
+                "reason": "The question does not appear related to the Snowflake Census dataset.",
+                "llm_error": failed_scope.get("llm_error"),
+                "llm_scope_fallback": True,
+            }
+        return {
+            "in_scope": True,
+            "resolved_question": question,
+            "reason": "The hosted LLM scope call failed, so the agent continued with cautious Snowflake Census metadata retrieval.",
+            "default_geography": "United States" if self._asks_for_us(lowered) else None,
+            "geography_query": self._fallback_geography_query(question),
+            "metadata_query": self._fallback_metadata_query(question),
+            "metadata_queries": self._fallback_metadata_queries(question),
+            "metadata_top_k": 30,
+            "llm_error": failed_scope.get("llm_error"),
+            "llm_scope_fallback": True,
+        }
+
+    def _fallback_metadata_query(self, question: str) -> str:
+        lowered = question.lower()
+        if "population" in lowered or "people" in lowered or "resident" in lowered:
+            return "total population"
+        if any(term in lowered for term in ["rental unit", "rental units", "renter occupied"]):
+            return "renter occupied housing units tenure"
+        return question
+
+    def _fallback_metadata_queries(self, question: str) -> list[str]:
+        queries = [self._fallback_metadata_query(question), question]
+        queries.extend(self._metadata_query_expansions(" ".join(queries)))
+        return list(dict.fromkeys(queries))
+
+    def _fallback_geography_query(self, question: str) -> str | None:
+        lowered = question.lower()
+        if self._asks_for_us(lowered):
+            return "United States"
+        matches = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b", question)
+        ignored = {"What", "Which", "Census Block", "United States"}
+        for match in matches:
+            if match not in ignored:
+                return match
+        return None
+
+    def _asks_for_us(self, lowered_question: str) -> bool:
+        return any(term in lowered_question for term in [" us ", " usa", " united states", "national", "overall"]) or lowered_question.endswith(" us population?")
+
+    def _fallback_sql_payload(
+        self,
+        resolved_question: str,
+        scope: dict[str, Any],
+        metadata: dict[str, Any],
+        geography: dict[str, Any],
+    ) -> dict[str, Any]:
+        metric = self._best_additive_metric(metadata)
+        if not metric:
+            return {
+                "sql": "",
+                "parameters": {},
+                "selected_columns": [],
+                "reasoning": "No additive Census estimate column was available in the retrieved metadata fallback.",
+                "fallback": True,
+            }
+
+        table = str(metric["table_name"]).upper()
+        column = str(metric["column_name"])
+        alias = self._safe_alias(column)
+        threshold = self._threshold_value(resolved_question)
+        lowered = resolved_question.lower()
+        parameters: dict[str, Any] = {}
+
+        if threshold is not None and any(term in lowered for term in ["block group", "census block group", "cbg"]):
+            sql = (
+                f'SELECT "CENSUS_BLOCK_GROUP", "{column}" AS {alias} '
+                f'FROM "{settings.snowflake_database}"."{settings.snowflake_schema}"."{table}" '
+                f'WHERE "{column}" > %(threshold)s '
+                f'ORDER BY "{column}" DESC'
+            )
+            parameters["threshold"] = threshold
+            reasoning = "Metadata fallback selected a retrieved additive estimate column and applied the requested threshold."
+        elif any(term in lowered for term in ["highest", "largest", "most", "top"]) and "state" in lowered:
+            sql = (
+                f'SELECT LEFT("CENSUS_BLOCK_GROUP", 2) AS state_fips, SUM("{column}") AS {alias} '
+                f'FROM "{settings.snowflake_database}"."{settings.snowflake_schema}"."{table}" '
+                f'GROUP BY state_fips ORDER BY {alias} DESC LIMIT 1'
+            )
+            reasoning = "Metadata fallback grouped the retrieved additive estimate by state FIPS and ranked descending."
+        else:
+            where = ""
+            if geography.get("type") == "state" and geography.get("state_fips"):
+                where = ' WHERE LEFT("CENSUS_BLOCK_GROUP", 2) = %(state_fips)s'
+                parameters["state_fips"] = geography["state_fips"]
+            sql = (
+                f'SELECT SUM("{column}") AS {alias} '
+                f'FROM "{settings.snowflake_database}"."{settings.snowflake_schema}"."{table}"'
+                f"{where}"
+            )
+            reasoning = "Metadata fallback summed a retrieved additive Census estimate column."
+
+        return {
+            "sql": sql,
+            "parameters": parameters,
+            "selected_columns": [column],
+            "reasoning": reasoning,
+            "fallback": True,
+            "metadata_label": metric.get("label"),
+        }
+
+    def _best_additive_metric(self, metadata: dict[str, Any]) -> dict[str, Any] | None:
+        for row in metadata.get("results", []):
+            label = str(row.get("label") or "").lower()
+            column = str(row.get("column_name") or "")
+            if not column or not row.get("table_name"):
+                continue
+            if not re.search(r"e\d+$", column, re.IGNORECASE):
+                continue
+            if any(term in label for term in ["median", "average", "mean", "aggregate", "dollars", "percent", "percentage", "rate"]):
+                continue
+            return row
+        return None
+
+    def _threshold_value(self, question: str) -> int | None:
+        match = re.search(r"(?:over|more than|greater than|above)\s+([0-9][0-9,]*)", question, re.IGNORECASE)
+        if not match:
+            return None
+        return int(match.group(1).replace(",", ""))
+
+    def _safe_alias(self, column: str) -> str:
+        return re.sub(r"[^a-zA-Z0-9_]", "_", column).lower()
 
     def _compact_table_descriptions(
         self,
