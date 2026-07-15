@@ -129,6 +129,17 @@ class ResponseGenerator:
                     value = row.get("VALUE") if "VALUE" in row else row.get("value")
                     parts.append(f"{index}. {_ranked_geography_name(plan, state_lookup, county_lookup, row)} ({_format_value_with_unit(value, metric_unit)})")
                 answer = f"Using the available {plan.metric.year} Census dataset: " + " ".join(parts)
+        elif plan.query_type == "grouped_metric":
+            parts = []
+            for row in rows:
+                value = row.get("VALUE") if "VALUE" in row else row.get("value")
+                parts.append(f"{_ranked_geography_name(plan, state_lookup, county_lookup, row)} ({_format_value_with_unit(value, metric_unit)})")
+            geography_label = "Census Block Group" if plan.geography_level == "block_group" else (plan.geography_level or "geography").replace("_", " ")
+            answer = (
+                f"Using the available {plan.metric.year} Census dataset, {metric_label.lower()} by {geography_label} is: "
+                + "; ".join(parts)
+                + "."
+            )
         elif plan.query_type == "filter":
             parts = []
             for row in rows:
@@ -240,7 +251,7 @@ class ResponseGenerator:
             interpretation["metadata_discovery"] = True
             interpretation["metric_definition"] = plan.metric.description
             interpretation["universe"] = plan.metric.universe
-            answer += f" In this dataset, the selected measure is defined as: {plan.metric.description}. Universe: {plan.metric.universe}."
+            answer += f" In this dataset, the selected measure is defined as: {plan.metric.description.rstrip('.')}. Universe: {plan.metric.universe}."
         if plan.metric.measure_type == "median":
             interpretation["aggregation_note"] = (
                 "This uses the configured block-group median-income field as a proxy. "

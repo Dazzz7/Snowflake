@@ -19,3 +19,9 @@ def test_rental_units_does_not_match_shopping_distance():
 
     assert intent.metric != "shopping_distance"
     assert intent.geography_level == "block_group"
+
+
+def test_average_age_routes_to_dynamic_planner_first():
+    agent = CensusChatAgent()
+
+    assert agent._should_try_dynamic_semantic_first("which state has the highest average age of residents") is True

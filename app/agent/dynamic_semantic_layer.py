@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from app.agent.hosted_llm_client import HostedLLMClient
+from app.catalog.age_bands import AGE_BANDS
 from app.catalog.catalog_search import summarize_schema_matches
 from app.catalog.geography import find_geographies
 from app.config import settings
@@ -13,7 +14,7 @@ from app.models.query_models import MetricDefinition, QueryPlan, ValidationResul
 
 NUMERIC_TYPES = {"NUMBER", "FLOAT", "DOUBLE", "REAL", "DECIMAL", "INT", "INTEGER"}
 ALLOWED_AGGREGATIONS = {"sum", "avg", "approx_median"}
-ALLOWED_OPERATIONS = {"ranking", "aggregate_metric", "filter", "comparison"}
+ALLOWED_OPERATIONS = {"ranking", "aggregate_metric", "filter", "comparison", "grouped_metric"}
 ALLOWED_GEOGRAPHY_LEVELS = {"state", "county", "block_group"}
 ALLOWED_TABLE_PATTERN = re.compile(r"^\d{4}_(CBG|METADATA_CBG|CBG_PATTERNS)", re.IGNORECASE)
 
@@ -54,6 +55,17 @@ class DynamicSemanticLayer:
         self.llm = llm if llm is not None else (HostedLLMClient() if settings.has_hosted_llm_config else None)
 
     def create_plan(self, question: str) -> tuple[QueryPlan | None, ValidationResult, dict]:
+        average_age_plan = self._average_age_plan(question)
+        if average_age_plan:
+            return average_age_plan, ValidationResult(True), {
+                "discovery_source": "derived_age_distribution",
+                "validated_contract": {
+                    "operation": average_age_plan.query_type,
+                    "metric_definition": average_age_plan.metric.description,
+                    "source_columns": average_age_plan.metric.source_columns,
+                    "calculation": average_age_plan.metric.calculation,
+                },
+            }
         schema_result = search_variable_metadata(question, year=2020, limit=60)
         discovery_source = "field_descriptions"
         if schema_result.error or not schema_result.rows:
@@ -86,6 +98,75 @@ class DynamicSemanticLayer:
         diagnostics["validated_contract"] = contract
         return plan, ValidationResult(True), diagnostics
 
+    def _average_age_plan(self, question: str) -> QueryPlan | None:
+        lowered = question.lower()
+        if not re.search(r"\b(average|mean)\b", lowered) or not re.search(r"\bage\b", lowered):
+            return None
+        geography_level = self._geography_level_from_question(lowered)
+        geographies = find_geographies(question)
+        operation = "aggregate_metric"
+        if any(term in lowered for term in ["highest", "lowest", "top", "rank", "most", "least", "fewest"]):
+            operation = "ranking"
+        elif re.search(r"\b(per|by|for each)\s+state\b", lowered) or re.search(r"\b(per|by|for each)\s+county\b", lowered):
+            operation = "grouped_metric"
+        elif not geographies and geography_level in {"state", "county"}:
+            operation = "grouped_metric"
+        if operation == "aggregate_metric" and not geographies:
+            return None
+
+        source_columns = [column for band in AGE_BANDS for column in band.columns]
+        metric = MetricDefinition(
+            metric_id="dynamic_average_age",
+            display_name="Approximate average age",
+            description="Approximate mean resident age estimated from ACS sex-by-age population bands using band midpoints.",
+            synonyms=["average age", "mean age", "average age of residents"],
+            table="2020_CBG_B01",
+            geography_column="CENSUS_BLOCK_GROUP",
+            aggregation="WEIGHTED_AVERAGE",
+            aggregation_behavior="derived_weighted_average",
+            unit="years",
+            year=2020,
+            universe="Total population",
+            verified=True,
+            estimate_columns=source_columns,
+            source_columns=source_columns,
+            measure_type="average",
+            calculation="weighted_average_age",
+        )
+        filters = [
+            {
+                "type": geo.type,
+                "name": geo.name,
+                "fips": geo.fips_code,
+                "county_fips": geo.county_fips,
+                "filter_column": "CENSUS_BLOCK_GROUP",
+                "filter_method": "county_set" if geo.type == "city" and geo.county_fips else "prefix",
+                "prefix_length": 5 if geo.type == "city" else 2,
+            }
+            for geo in geographies
+            if (geo.type == "state" and geo.fips_code) or (geo.type == "city" and geo.county_fips)
+        ]
+        sort_direction = "ascending" if any(term in lowered for term in ["lowest", "least", "fewest", "youngest"]) else "descending"
+        row_limit = self._limit_from_question(lowered)
+        if operation == "grouped_metric":
+            row_limit = 100
+        plan = QueryPlan(
+            query_type=operation,
+            metric=metric,
+            geography_filters=filters,
+            geography_level=geography_level,
+            geography_scope="selected" if filters else "all",
+            operation_type=operation,
+            sort_direction=sort_direction,
+            row_limit=row_limit,
+            interpretation=f"Approximate average age by {geography_level.replace('_', ' ')} from ACS age bands.",
+            analysis_params={"derived_metric": "weighted_age_band_midpoint_average"},
+        )
+        if operation in {"ranking", "grouped_metric"}:
+            plan.group_by = ["state_fips" if geography_level == "state" else "county_fips"]
+            plan.order_by = [f"value {'ASC' if sort_direction == 'ascending' else 'DESC'}"]
+        return plan
+
     def _candidate_is_eligible(self, row: dict[str, Any]) -> bool:
         table = _normal(row.get("TABLE_NAME") or row.get("table_name"))
         column = _normal(row.get("COLUMN_NAME") or row.get("column_name"))
@@ -106,7 +187,7 @@ class DynamicSemanticLayer:
         system = (
             "You propose a constrained Census analytics contract from live schema candidates. "
             "Return strict JSON only. Do not write SQL. Choose only a table and column from candidates. "
-            "Allowed operations: ranking, aggregate_metric, filter, comparison. Allowed geography levels: state, county, block_group. "
+            "Allowed operations: ranking, aggregate_metric, filter, comparison, grouped_metric. Allowed geography levels: state, county, block_group. "
             "Allowed aggregations: sum, avg, approx_median, rate. Use sum for additive counts, avg for distances/rates/means, "
             "and approx_median only when the user asks for a median-like column. If unclear, set needs_clarification true."
         )

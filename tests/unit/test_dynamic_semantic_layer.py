@@ -198,3 +198,16 @@ def test_rental_units_question_uses_direct_tenure_variable(monkeypatch):
     assert plan.metric.display_name == "Renter-occupied housing units"
     assert plan.metric.estimate_columns == ["B25003e3"]
     assert diagnostics["validated_contract"]["selected_variable_labels"]["B25003E3"].endswith("Renter occupied")
+
+
+def test_average_age_per_state_builds_grouped_derived_metric():
+    plan, validation, diagnostics = DynamicSemanticLayer(llm=None).create_plan("average age of residents per state in usa")
+
+    assert validation.is_valid
+    assert plan is not None
+    assert plan.query_type == "grouped_metric"
+    assert plan.geography_level == "state"
+    assert plan.metric.metric_id == "dynamic_average_age"
+    assert plan.metric.calculation == "weighted_average_age"
+    assert "B01001e3" in plan.metric.source_columns
+    assert diagnostics["validated_contract"]["operation"] == "grouped_metric"

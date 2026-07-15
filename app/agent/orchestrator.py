@@ -291,6 +291,8 @@ class CensusChatAgent:
             "employment",
             "occupation",
             "occupations",
+            "average age",
+            "mean age",
             "raw visit",
             "visitor count",
             "visit count",

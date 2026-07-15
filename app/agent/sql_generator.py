@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.catalog.age_bands import columns_for_age_range
+from app.catalog.age_bands import AGE_BANDS, columns_for_age_range
 from app.catalog.geography import load_states
 from app.config import settings
 from app.models.query_models import QueryPlan
@@ -31,6 +31,19 @@ class SQLGenerator:
     def _sum_expression(self, columns: list[str]) -> str:
         return " + ".join(quote(column) for column in columns)
 
+    def _weighted_average_age_expression(self) -> str:
+        weighted_terms = []
+        count_terms = []
+        for band in AGE_BANDS:
+            max_age = band.max_age if band.max_age is not None else 89
+            midpoint = (band.min_age + max_age) / 2
+            for column in band.columns:
+                weighted_terms.append(f"COALESCE({quote(column)}, 0) * {midpoint}")
+                count_terms.append(f"COALESCE({quote(column)}, 0)")
+        weighted_sum = " + ".join(weighted_terms)
+        count_sum = " + ".join(count_terms)
+        return f"SUM({weighted_sum}) / NULLIF(SUM({count_sum}), 0)"
+
     def _aggregate_expression(self, plan: QueryPlan) -> str:
         dynamic_age_columns = self._dynamic_age_columns(plan)
         if dynamic_age_columns:
@@ -42,6 +55,8 @@ class SQLGenerator:
             numerator = self._sum_expression(plan.metric.numerator_columns)
             denominator = self._sum_expression(plan.metric.denominator_columns)
             return f"100.0 * SUM({numerator}) / NULLIF(SUM({denominator}), 0)"
+        if plan.metric.calculation == "weighted_average_age":
+            return self._weighted_average_age_expression()
         if plan.metric.measure_type == "median" and plan.metric.estimate_column:
             return f"APPROX_PERCENTILE({quote(plan.metric.estimate_column)}, 0.5)"
         if plan.metric.calculation == "avg_column" and plan.metric.estimate_column:
@@ -191,6 +206,35 @@ FROM {database}.{schema}.{table}
 GROUP BY 1
 ORDER BY value {direction}
 {limit_clause}
+""".strip()
+            plan.parameters = parameters
+            plan.sql = sql
+            return plan
+
+        if plan.query_type == "grouped_metric":
+            if plan.geography_level == "block_group":
+                group_expr = geo_col
+                id_alias = "census_block_group"
+            else:
+                group_expr = f"LEFT({geo_col}, 5)" if plan.geography_level == "county" else f"LEFT({geo_col}, 2)"
+                id_alias = "county_fips" if plan.geography_level == "county" else "state_fips"
+            where_conditions = []
+            parameters = {}
+            if plan.geography_filters:
+                where_clause_text, parameters = self._selected_geography_filter(plan, geo_col)
+                where_conditions.append(where_clause_text)
+            elif plan.geography_level == "state":
+                where_conditions.append(self._state_scope_filter(geo_col))
+            where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
+            sql = f"""
+SELECT
+    {group_expr} AS {id_alias},
+    {aggregate_expression} AS value
+FROM {database}.{schema}.{table}
+{where_clause}
+GROUP BY 1
+ORDER BY 1
+LIMIT {plan.row_limit or 100}
 """.strip()
             plan.parameters = parameters
             plan.sql = sql

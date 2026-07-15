@@ -73,6 +73,7 @@ def _operation_name(plan: QueryPlan) -> str:
         "ranking": "rank",
         "comparison": "compare",
         "filter": "filter",
+        "grouped_metric": "group_by",
         "aggregate_metric": "lookup",
         "age_breakdown": "breakdown",
         "race_breakdown": "breakdown",
@@ -116,6 +117,9 @@ def operation_contract(plan: QueryPlan) -> dict[str, Any]:
             "operator": plan.threshold_operator,
             "value": plan.threshold_value,
         }
+    if plan.query_type == "grouped_metric":
+        contract["group_by"] = plan.group_by
+        contract["limit"] = plan.row_limit
     if plan.query_type == "retail_gap_analysis":
         contract["operation"] = "retail_gap_analysis"
         contract["sort"] = {"field": "avg_distance_from_home_meters", "direction": "desc"}
@@ -152,7 +156,7 @@ def metric_contract(plan: QueryPlan) -> dict[str, Any]:
         },
         "unit": "%" if plan.metric.metric_id == "population_by_age" and plan.value_kind == "percentage" else plan.metric.unit,
         "aggregation": plan.metric.aggregation_behavior,
-        "allowed_geography_levels": ["state", "county", "verified_city_county_set"],
+        "allowed_geography_levels": ["state", "county", "block_group", "verified_city_county_set"],
         "time_coverage": {"start": plan.metric.year, "end": plan.metric.year},
         "universe": plan.metric.universe,
         "synonyms": plan.metric.synonyms,
@@ -190,6 +194,8 @@ def claim_payload(plan: QueryPlan, result: QueryResult) -> dict[str, Any]:
         claim = f"The response compares {label} for the requested geographies in {plan.metric.year}."
     elif plan.query_type == "filter":
         claim = f"The response lists geographies matching the requested {label} threshold in {plan.metric.year}."
+    elif plan.query_type == "grouped_metric":
+        claim = f"The response lists {label} grouped by {plan.geography_level} in {plan.metric.year}."
     elif plan.query_type.endswith("_breakdown"):
         claim = f"The response breaks down {geography} by {plan.dimension} in {plan.metric.year}."
     columns = source_columns(plan)
