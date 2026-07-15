@@ -27,8 +27,8 @@ st.title(settings.app_name)
 
 with st.sidebar:
     st.subheader("Status")
-    st.write("Language parsing: hosted LLM rewrite + deterministic validated planner")
-    st.write("Metadata: live Snowflake schema search + verified metric contracts")
+    st.write("Planning: hosted LLM scope, metadata, SQL, and answer generation")
+    st.write("Scope: population, age, sex, race, land/geography only")
     if settings.has_hosted_llm_config:
         st.write(f"Hosted LLM: `{settings.llm_model}`")
     elif settings.use_llm:
@@ -36,12 +36,13 @@ with st.sidebar:
     st.write("Snowflake: configured" if settings.has_snowflake_credentials else "Snowflake: not configured")
     st.subheader("Try")
     examples = [
-        "What is the total population of California?",
-        "Compare the populations of Texas and Florida",
-        "What fields do you have about shopping, brands, and distance?",
-        "Which high-income neighborhoods in NYC are traveling the farthest to do their shopping, and which retail brands do they visit most often?",
-        "Top 10 states by population",
-        "What about New York?",
+        "What is the US population?",
+        "What is the population of California?",
+        "Which state has the highest population?",
+        "How many people are over 65 in the US?",
+        "Are there more males or females in Texas?",
+        "What is the racial distribution of Georgia?",
+        "Which state has the largest land area?",
     ]
     for example in examples:
         if st.button(example, use_container_width=True):
@@ -60,7 +61,7 @@ for message in st.session_state.messages:
             with st.expander("SQL"):
                 st.code(message["sql"], language="sql")
 
-question = st.chat_input("Ask a question about US Census population and demographics")
+question = st.chat_input("Ask about US Census population, age, sex, race, land, or geography")
 if not question and st.session_state.get("pending_question"):
     question = st.session_state.pop("pending_question")
 
