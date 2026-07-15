@@ -125,14 +125,47 @@ class IntentParser:
         if re.search(r"\b(race|racial|by race)\b", lowered):
             dimension = "race"
         if re.search(r"\bincome\b", lowered) and not re.search(r"\b(median household income|median income|per capita|family income|mean income)\b", lowered):
+            if self._is_retail_gap_question(lowered):
+                metric = "shopping_distance"
+            else:
+                return QueryIntent(
+                    intent="ambiguous",
+                    geographies=geographies,
+                    geography_level=geography_level,
+                    geography_scope=geography_scope,
+                    year=year,
+                    needs_clarification=True,
+                    clarification_question="Do you mean median household income, per-capita income, family income, or another income measure?",
+                )
+        if self._is_retail_gap_question(lowered):
+            if not geographies:
+                return QueryIntent(
+                    intent="ambiguous",
+                    metric="shopping_distance",
+                    geography_level="city",
+                    geography_scope=None,
+                    year=year,
+                    needs_clarification=True,
+                    clarification_question="Which target city should I analyze? I need a named city so I can restrict the Census Block Groups.",
+                )
             return QueryIntent(
-                intent="ambiguous",
+                intent="retail_gap_analysis",
+                metric="shopping_distance",
                 geographies=geographies,
-                geography_level=geography_level,
+                geography_level="city" if any(geo.type == "city" for geo in geographies) else geography_level,
                 geography_scope=geography_scope,
                 year=year,
-                needs_clarification=True,
-                clarification_question="Do you mean median household income, per-capita income, family income, or another income measure?",
+                aggregation="average",
+                operation_type="retail_gap_analysis",
+                sort_direction="descending",
+                limit=limit or 5,
+                threshold_value=threshold_value,
+                analysis_params={
+                    "income_threshold": threshold_value,
+                    "income_percentile": 0.8,
+                    "brand_source": "TOP_BRANDS",
+                    "distance_metric": "DISTANCE_FROM_HOME",
+                },
             )
         if age_min is not None or age_max is not None:
             dimension = "age"
@@ -244,6 +277,16 @@ class IntentParser:
         if "resident" in lowered or "people" in lowered:
             return "total_population"
         return None
+
+    def _is_retail_gap_question(self, lowered: str) -> bool:
+        retail_terms = ["shopping", "retail", "brand", "brands", "store", "stores"]
+        mobility_terms = ["distance", "farthest", "travel", "traveled", "traveling", "drive", "foot traffic"]
+        income_terms = ["income", "high-income", "wealthy", "affluent"]
+        return (
+            any(term in lowered for term in retail_terms)
+            and any(term in lowered for term in mobility_terms)
+            and any(term in lowered for term in income_terms)
+        )
 
     def _geography_level_from_text(self, lowered: str, geographies: list) -> str | None:
         if "county" in lowered or "counties" in lowered:

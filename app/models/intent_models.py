@@ -32,6 +32,7 @@ class QueryIntent:
     age_min: int | None = None
     age_max: int | None = None
     value_kind: str | None = None
+    analysis_params: dict = field(default_factory=dict)
     needs_clarification: bool = False
     clarification_question: str | None = None
     unsupported_reason: str | None = None

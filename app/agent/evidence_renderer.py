@@ -116,6 +116,16 @@ def operation_contract(plan: QueryPlan) -> dict[str, Any]:
             "operator": plan.threshold_operator,
             "value": plan.threshold_value,
         }
+    if plan.query_type == "retail_gap_analysis":
+        contract["operation"] = "retail_gap_analysis"
+        contract["sort"] = {"field": "avg_distance_from_home_meters", "direction": "desc"}
+        contract["limit"] = plan.row_limit
+        contract["income_filter"] = {
+            "metric_id": plan.analysis_params.get("income_metric_id", "median_household_income"),
+            "threshold": plan.analysis_params.get("income_threshold"),
+            "percentile": plan.analysis_params.get("income_percentile", 0.8),
+        }
+        contract["brand_source"] = plan.analysis_params.get("brand_source", "TOP_BRANDS")
     if plan.age_min is not None or plan.age_max is not None:
         contract["dimension_filter"] = {
             "dimension": "age",
@@ -163,7 +173,15 @@ def claim_payload(plan: QueryPlan, result: QueryResult) -> dict[str, Any]:
     label = metric_label(plan).lower()
     unit = "%" if plan.metric.metric_id == "population_by_age" and plan.value_kind == "percentage" else plan.metric.unit
     claim = None
-    if plan.query_type == "ranking":
+    if plan.query_type == "retail_gap_analysis":
+        value = row.get("AVG_DISTANCE_FROM_HOME_METERS") or row.get("avg_distance_from_home_meters")
+        geography = plan.geography_filters[0]["name"] if plan.geography_filters else geography
+        claim = (
+            f"The listed high-income Census Block Groups in {geography} had the farthest average visitor distance "
+            f"from home among analyzed venue CBGs."
+        )
+        unit = "meters"
+    elif plan.query_type == "ranking":
         adjective = "smallest" if plan.sort_direction == "ascending" else "largest"
         claim = f"{geography} had the {adjective} {label} among U.S. states in {plan.metric.year}."
     elif plan.query_type == "aggregate_metric":

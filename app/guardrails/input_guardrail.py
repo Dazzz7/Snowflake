@@ -53,6 +53,17 @@ CENSUS_TERMS = {
     "lowest",
     "second",
     "largest",
+    "shopping",
+    "retail",
+    "brand",
+    "brands",
+    "foot traffic",
+    "traffic",
+    "distance",
+    "traveled",
+    "traveling",
+    "neighborhood",
+    "neighborhoods",
 }
 
 

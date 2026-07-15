@@ -45,6 +45,7 @@ class QueryPlan:
     age_min: int | None = None
     age_max: int | None = None
     value_kind: str | None = None
+    analysis_params: dict = field(default_factory=dict)
     group_by: list[str] = field(default_factory=list)
     order_by: list[str] = field(default_factory=list)
     row_limit: int | None = None

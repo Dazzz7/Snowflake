@@ -238,6 +238,27 @@
     "universe": "Total population",
     "verified": true
   },
+  "shopping_distance": {
+    "display_name": "Visitor distance from home",
+    "description": "Distance visitors traveled from home to venues in Census Block Group patterns",
+    "category": "mobility",
+    "dimension": "shopping",
+    "measure_type": "distance",
+    "synonyms": ["shopping distance", "distance from home", "distance traveled", "foot traffic distance", "retail travel distance", "traveling the farthest"],
+    "table": "2019_CBG_PATTERNS",
+    "estimate_column": "DISTANCE_FROM_HOME",
+    "estimate_columns": ["DISTANCE_FROM_HOME"],
+    "source_columns": ["DISTANCE_FROM_HOME", "TOP_BRANDS", "RAW_VISIT_COUNT", "RAW_VISITOR_COUNT"],
+    "margin_of_error_column": null,
+    "geography_column": "CENSUS_BLOCK_GROUP",
+    "aggregation": "AVG",
+    "aggregation_behavior": "derived_average",
+    "calculation": "avg_column",
+    "unit": "meters",
+    "year": 2019,
+    "universe": "SafeGraph-style venue pattern rows by Census Block Group",
+    "verified": true
+  },
   "population_by_race": {
     "display_name": "Population by race",
     "description": "Population distribution by race categories",

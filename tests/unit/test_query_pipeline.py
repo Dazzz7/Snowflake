@@ -141,6 +141,33 @@ def test_state_ranking_filters_to_known_states():
     assert "'72'" not in plan.sql
 
 
+def test_retail_gap_question_requires_named_target_city():
+    intent = IntentParser().parse(
+        "Which high-income neighborhoods in my target city are traveling the farthest to do their shopping, and which retail brands do they visit most often?"
+    )
+    plan, validation = QueryPlanner().create_plan(intent)
+    assert plan is None
+    assert validation.is_valid is False
+    assert "target city" in (validation.reason or "").lower()
+
+
+def test_retail_gap_question_compiles_for_verified_city():
+    intent = IntentParser().parse(
+        "Which high-income neighborhoods in NYC are traveling the farthest to do their shopping, and which retail brands do they visit most often?"
+    )
+    plan, validation = QueryPlanner().create_plan(intent)
+    assert validation.is_valid
+    assert plan is not None
+    assert plan.query_type == "retail_gap_analysis"
+    assert plan.metric.metric_id == "shopping_distance"
+    plan = SQLGenerator().generate(plan)
+    assert "2019_CBG_PATTERNS" in plan.sql
+    assert "2020_CBG_B19" in plan.sql
+    assert "DISTANCE_FROM_HOME" in plan.sql
+    assert "TOP_BRANDS" in plan.sql
+    assert SQLValidator().validate(plan).is_valid
+
+
 def test_income_without_definition_clarifies():
     intent = IntentParser().parse("Which state has the highest income?")
     plan, validation = QueryPlanner().create_plan(intent)

@@ -44,6 +44,8 @@ class SQLGenerator:
             return f"100.0 * SUM({numerator}) / NULLIF(SUM({denominator}), 0)"
         if plan.metric.measure_type == "median" and plan.metric.estimate_column:
             return f"APPROX_PERCENTILE({quote(plan.metric.estimate_column)}, 0.5)"
+        if plan.metric.calculation == "avg_column" and plan.metric.estimate_column:
+            return f"AVG({quote(plan.metric.estimate_column)})"
         return f"SUM({self._metric_expression(plan)})"
 
     def _state_scope_filter(self, geo_col: str) -> str:
@@ -68,6 +70,100 @@ class SQLGenerator:
         table = quote(plan.metric.table)
         geo_col = quote(plan.metric.geography_column)
         aggregate_expression = self._aggregate_expression(plan)
+
+        if plan.query_type == "retail_gap_analysis":
+            item = plan.geography_filters[0]
+            county_fips = item.get("county_fips", [])
+            county_placeholders = ", ".join(f"%(county_{index})s" for index, _ in enumerate(county_fips))
+            parameters = {f"county_{index}": fips for index, fips in enumerate(county_fips)}
+            parameters["income_threshold"] = plan.analysis_params.get("income_threshold")
+            parameters["income_percentile"] = plan.analysis_params.get("income_percentile", 0.8)
+            sql = f"""
+WITH city_income AS (
+    SELECT
+        "CENSUS_BLOCK_GROUP" AS census_block_group,
+        "B19013e1" AS median_household_income
+    FROM {database}.{schema}."2020_CBG_B19"
+    WHERE LEFT("CENSUS_BLOCK_GROUP", 5) IN ({county_placeholders})
+      AND "B19013e1" IS NOT NULL
+      AND "B19013e1" > 0
+      AND "B19013e1" < 1000000
+),
+income_cutoff AS (
+    SELECT
+        COALESCE(%(income_threshold)s, APPROX_PERCENTILE(median_household_income, %(income_percentile)s)) AS income_cutoff
+    FROM city_income
+),
+high_income_cbg AS (
+    SELECT
+        city_income.census_block_group,
+        city_income.median_household_income,
+        income_cutoff.income_cutoff
+    FROM city_income
+    CROSS JOIN income_cutoff
+    WHERE city_income.median_household_income >= income_cutoff.income_cutoff
+),
+ranked_neighborhoods AS (
+    SELECT
+        high_income_cbg.census_block_group,
+        high_income_cbg.median_household_income,
+        high_income_cbg.income_cutoff,
+        AVG({quote("DISTANCE_FROM_HOME")}) AS avg_distance_from_home_meters,
+        SUM({quote("RAW_VISIT_COUNT")}) AS raw_visit_count,
+        SUM({quote("RAW_VISITOR_COUNT")}) AS raw_visitor_count,
+        COUNT(*) AS pattern_rows
+    FROM high_income_cbg
+    JOIN {database}.{schema}.{table} patterns
+      ON patterns.{geo_col} = high_income_cbg.census_block_group
+    WHERE patterns.{quote("DISTANCE_FROM_HOME")} IS NOT NULL
+    GROUP BY 1, 2, 3
+    HAVING COUNT(*) > 0
+    ORDER BY avg_distance_from_home_meters DESC
+    LIMIT {plan.row_limit or 5}
+),
+brand_counts AS (
+    SELECT
+        ranked_neighborhoods.census_block_group,
+        flattened_brand.value::STRING AS brand,
+        COUNT(*) AS brand_mentions
+    FROM ranked_neighborhoods
+    JOIN {database}.{schema}.{table} patterns
+      ON patterns.{geo_col} = ranked_neighborhoods.census_block_group,
+      LATERAL FLATTEN(input => patterns.{quote("TOP_BRANDS")}) flattened_brand
+    WHERE flattened_brand.value IS NOT NULL
+    GROUP BY 1, 2
+),
+brand_ranked AS (
+    SELECT
+        census_block_group,
+        brand,
+        brand_mentions,
+        ROW_NUMBER() OVER (
+            PARTITION BY census_block_group
+            ORDER BY brand_mentions DESC, brand
+        ) AS brand_rank
+    FROM brand_counts
+)
+SELECT
+    ranked_neighborhoods.census_block_group,
+    ranked_neighborhoods.median_household_income,
+    ranked_neighborhoods.income_cutoff,
+    ranked_neighborhoods.avg_distance_from_home_meters,
+    ranked_neighborhoods.raw_visit_count,
+    ranked_neighborhoods.raw_visitor_count,
+    ranked_neighborhoods.pattern_rows,
+    LISTAGG(brand_ranked.brand || ' (' || brand_ranked.brand_mentions || ')', ', ')
+        WITHIN GROUP (ORDER BY brand_ranked.brand_mentions DESC, brand_ranked.brand) AS top_brands
+FROM ranked_neighborhoods
+LEFT JOIN brand_ranked
+  ON ranked_neighborhoods.census_block_group = brand_ranked.census_block_group
+ AND brand_ranked.brand_rank <= 5
+GROUP BY 1, 2, 3, 4, 5, 6, 7
+ORDER BY avg_distance_from_home_meters DESC
+""".strip()
+            plan.parameters = parameters
+            plan.sql = sql
+            return plan
 
         if plan.query_type == "ranking":
             direction = "ASC" if plan.sort_direction == "ascending" else "DESC"

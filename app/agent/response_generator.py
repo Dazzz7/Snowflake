@@ -28,6 +28,12 @@ def _format_value_with_unit(value: object, unit: str, approximate: bool = False)
     return f"{formatted} {unit}"
 
 
+def _meters_to_miles(value: object) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    return value / 1609.344
+
+
 def _ordinal(value: int) -> str:
     special = {1: "first", 2: "second", 3: "third"}
     if value in special:
@@ -129,6 +135,30 @@ class ResponseGenerator:
                 + f"{_format_value_with_unit(plan.threshold_value or 0, metric_unit)}: "
                 + ", ".join(parts)
                 + "."
+            )
+        elif plan.query_type == "retail_gap_analysis":
+            geography = plan.geography_filters[0]["name"] if plan.geography_filters else "the target city"
+            parts = []
+            for index, row in enumerate(rows, start=1):
+                cbg = row.get("CENSUS_BLOCK_GROUP") or row.get("census_block_group")
+                income = row.get("MEDIAN_HOUSEHOLD_INCOME") or row.get("median_household_income")
+                cutoff = row.get("INCOME_CUTOFF") or row.get("income_cutoff")
+                distance = row.get("AVG_DISTANCE_FROM_HOME_METERS") or row.get("avg_distance_from_home_meters")
+                visits = row.get("RAW_VISIT_COUNT") or row.get("raw_visit_count")
+                brands = row.get("TOP_BRANDS") or row.get("top_brands") or "No brand mentions"
+                miles = _meters_to_miles(distance)
+                distance_text = f"{miles:,.1f} miles" if miles is not None else _format_value_with_unit(distance, "meters")
+                parts.append(
+                    f"{index}. CBG {cbg}: avg visitor distance {distance_text}, "
+                    f"median household income {_format_value_with_unit(income, 'USD')}, "
+                    f"visits {_format_number(visits)}, top brands {brands}"
+                )
+            cutoff_text = _format_value_with_unit(rows[0].get("INCOME_CUTOFF") or rows[0].get("income_cutoff"), "USD") if rows else "the top-income cutoff"
+            answer = (
+                f"Using ACS 2020 income data and 2019 venue-pattern data, these high-income Census Block Groups in {geography} "
+                f"meet the income cutoff of about {cutoff_text} and have the farthest average visitor travel distances: "
+                + " ".join(parts)
+                + " Note: the patterns table is keyed to venue Census Block Groups, so this identifies high-income destination neighborhoods whose venues draw visitors from farther away; it does not prove that residents of those CBGs made every trip."
             )
         elif plan.query_type == "age_breakdown":
             row = rows[0]

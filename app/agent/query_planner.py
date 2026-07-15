@@ -22,6 +22,50 @@ class QueryPlanner:
             )
         if not metric.verified:
             return None, ValidationResult(False, "The matching metric has not been verified yet.")
+        if intent.intent == "retail_gap_analysis":
+            city_filters = [
+                {
+                    "type": geo.type,
+                    "name": geo.name,
+                    "fips": geo.fips_code,
+                    "county_fips": geo.county_fips,
+                    "filter_column": metric.geography_column,
+                    "filter_method": "county_set",
+                    "prefix_length": 5,
+                }
+                for geo in intent.geographies
+                if geo.type == "city" and geo.county_fips
+            ]
+            if not city_filters:
+                return None, ValidationResult(
+                    False,
+                    "I need a named target city with verified county boundaries before I can run the shopping-distance and brand analysis.",
+                )
+            plan = QueryPlan(
+                query_type="retail_gap_analysis",
+                metric=metric,
+                geography_filters=city_filters[:1],
+                geography_level="city",
+                geography_scope="selected",
+                operation_type="retail_gap_analysis",
+                sort_direction="descending",
+                row_limit=intent.limit or 5,
+                analysis_params={
+                    "income_threshold": intent.analysis_params.get("income_threshold"),
+                    "income_percentile": intent.analysis_params.get("income_percentile", 0.8),
+                    "brand_source": "TOP_BRANDS",
+                    "distance_metric": "DISTANCE_FROM_HOME",
+                    "income_metric_id": "median_household_income",
+                },
+                interpretation=(
+                    f"Find high-income Census Block Groups in {city_filters[0]['name']}, rank venue-pattern rows by "
+                    "average visitor distance from home, and summarize top brand mentions."
+                ),
+                llm_attempted=intent.llm_attempted,
+                llm_succeeded=intent.llm_succeeded,
+                llm_provider=intent.llm_provider,
+            )
+            return plan, ValidationResult(True)
         if metric.aggregation_behavior == "non_additive" and metric.measure_type != "median" and intent.intent in {"aggregate_metric", "comparison", "ranking", "filter"}:
             return None, ValidationResult(
                 False,

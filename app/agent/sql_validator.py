@@ -57,6 +57,17 @@ class SQLValidator:
                 "B02001e2",
                 "B02001e8",
             ]
+        elif plan.query_type == "retail_gap_analysis":
+            required_identifiers = [
+                "2019_CBG_PATTERNS",
+                "2020_CBG_B19",
+                metric.geography_column,
+                "B19013e1",
+                "DISTANCE_FROM_HOME",
+                "TOP_BRANDS",
+                "RAW_VISIT_COUNT",
+                "RAW_VISITOR_COUNT",
+            ]
         elif metric.metric_id == "population_by_age" and (plan.age_min is not None or plan.age_max is not None):
             required_identifiers = [metric.table, metric.geography_column, *columns_for_age_range(plan.age_min, plan.age_max)]
             if plan.value_kind == "percentage":
