@@ -83,10 +83,50 @@ def test_people_over_65_state_ranking_uses_composite_metric():
     assert validation.is_valid
     assert plan is not None
     assert plan.query_type == "ranking"
-    assert plan.metric.metric_id == "population_65_plus"
+    assert plan.metric.metric_id == "population_by_age"
+    assert plan.age_min == 65
     plan = SQLGenerator().generate(plan)
     assert "B01001e20" in plan.sql
     assert "B01003e1" not in plan.sql
+
+
+def test_people_over_55_state_ranking_uses_dynamic_age_range():
+    intent = IntentParser().parse("Which state has the most people age 55 and older?")
+    plan, validation = QueryPlanner().create_plan(intent)
+    assert validation.is_valid
+    assert plan is not None
+    assert plan.query_type == "ranking"
+    assert plan.metric.metric_id == "population_by_age"
+    assert plan.age_min == 55
+    plan = SQLGenerator().generate(plan)
+    assert "B01001e17" in plan.sql
+    assert "B01001e41" in plan.sql
+    assert "B01001e3" not in plan.sql
+
+
+def test_age_percentage_uses_dynamic_denominator():
+    intent = IntentParser().parse("What percentage of Florida residents are over 55?")
+    plan, validation = QueryPlanner().create_plan(intent)
+    assert validation.is_valid
+    assert plan is not None
+    assert plan.query_type == "aggregate_metric"
+    assert plan.metric.metric_id == "population_by_age"
+    assert plan.age_min == 55
+    assert plan.value_kind == "percentage"
+    plan = SQLGenerator().generate(plan)
+    assert "100.0 *" in plan.sql
+    assert "B01003e1" in plan.sql
+    assert SQLValidator().validate(plan).is_valid
+
+
+def test_state_ranking_filters_to_known_states():
+    intent = IntentParser().parse("Which state has the highest poverty rate?")
+    plan, validation = QueryPlanner().create_plan(intent)
+    assert validation.is_valid
+    assert plan is not None
+    plan = SQLGenerator().generate(plan)
+    assert "LEFT(\"CENSUS_BLOCK_GROUP\", 2) IN" in plan.sql
+    assert "'72'" not in plan.sql
 
 
 def test_income_without_definition_clarifies():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from app.catalog.age_bands import columns_for_age_range
 from app.catalog.metric_registry import load_metrics
 from app.config import settings
 from app.models.query_models import QueryPlan, ValidationResult
@@ -56,6 +57,10 @@ class SQLValidator:
                 "B02001e2",
                 "B02001e8",
             ]
+        elif metric.metric_id == "population_by_age" and (plan.age_min is not None or plan.age_max is not None):
+            required_identifiers = [metric.table, metric.geography_column, *columns_for_age_range(plan.age_min, plan.age_max)]
+            if plan.value_kind == "percentage":
+                required_identifiers.append("B01003e1")
         else:
             required_identifiers = [metric.table, metric.geography_column, *(metric.source_columns or metric.estimate_columns)]
             if metric.estimate_column:

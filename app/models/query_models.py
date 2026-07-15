@@ -42,6 +42,9 @@ class QueryPlan:
     threshold_operator: str | None = None
     threshold_value: float | None = None
     dimension: str | None = None
+    age_min: int | None = None
+    age_max: int | None = None
+    value_kind: str | None = None
     group_by: list[str] = field(default_factory=list)
     order_by: list[str] = field(default_factory=list)
     row_limit: int | None = None

@@ -44,9 +44,15 @@ GOLDEN_CASES = [
     },
     {
         "question": "which state has more no. of people greater than 65 age",
-        "metric": "population_65_plus",
+        "metric": "population_by_age",
         "query_type": "ranking",
         "column": "B01001e20",
+    },
+    {
+        "question": "Which state has the most people age 55 and older?",
+        "metric": "population_by_age",
+        "query_type": "ranking",
+        "column": "B01001e17",
     },
 ]
 

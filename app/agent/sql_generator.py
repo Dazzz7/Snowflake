@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.catalog.age_bands import columns_for_age_range
+from app.catalog.geography import load_states
 from app.config import settings
 from app.models.query_models import QueryPlan
 
@@ -9,7 +11,15 @@ def quote(identifier: str) -> str:
 
 
 class SQLGenerator:
+    def _dynamic_age_columns(self, plan: QueryPlan) -> list[str]:
+        if plan.metric.metric_id == "population_by_age" and (plan.age_min is not None or plan.age_max is not None):
+            return columns_for_age_range(plan.age_min, plan.age_max)
+        return []
+
     def _metric_expression(self, plan: QueryPlan) -> str:
+        dynamic_age_columns = self._dynamic_age_columns(plan)
+        if dynamic_age_columns:
+            return " + ".join(quote(column) for column in dynamic_age_columns)
         if plan.metric.calculation == "sum_columns" and plan.metric.estimate_columns:
             return " + ".join(quote(column) for column in plan.metric.estimate_columns)
         if plan.metric.estimate_column:
@@ -22,6 +32,12 @@ class SQLGenerator:
         return " + ".join(quote(column) for column in columns)
 
     def _aggregate_expression(self, plan: QueryPlan) -> str:
+        dynamic_age_columns = self._dynamic_age_columns(plan)
+        if dynamic_age_columns:
+            numerator = self._sum_expression(dynamic_age_columns)
+            if plan.value_kind == "percentage":
+                return f"100.0 * SUM({numerator}) / NULLIF(SUM({quote('B01003e1')}), 0)"
+            return f"SUM({numerator})"
         if plan.metric.calculation == "rate":
             numerator = self._sum_expression(plan.metric.numerator_columns)
             denominator = self._sum_expression(plan.metric.denominator_columns)
@@ -29,6 +45,11 @@ class SQLGenerator:
         if plan.metric.measure_type == "median" and plan.metric.estimate_column:
             return f"APPROX_PERCENTILE({quote(plan.metric.estimate_column)}, 0.5)"
         return f"SUM({self._metric_expression(plan)})"
+
+    def _state_scope_filter(self, geo_col: str) -> str:
+        fips_values = sorted({meta["state_fips"] for meta in load_states().values()})
+        literals = ", ".join(f"'{fips}'" for fips in fips_values)
+        return f"LEFT({geo_col}, 2) IN ({literals})"
 
     def _selected_geography_filter(self, plan: QueryPlan, geo_col: str) -> tuple[str, dict]:
         item = plan.geography_filters[0]
@@ -46,17 +67,18 @@ class SQLGenerator:
         schema = quote(settings.snowflake_schema)
         table = quote(plan.metric.table)
         geo_col = quote(plan.metric.geography_column)
-        metric_expression = self._metric_expression(plan)
         aggregate_expression = self._aggregate_expression(plan)
 
         if plan.query_type == "ranking":
             direction = "ASC" if plan.sort_direction == "ascending" else "DESC"
             limit_clause = f"LIMIT 1 OFFSET {plan.result_rank - 1}" if plan.result_rank else f"LIMIT {plan.row_limit or 10}"
+            where_clause = f"WHERE {self._state_scope_filter(geo_col)}"
             sql = f"""
 SELECT
     LEFT({geo_col}, 2) AS state_fips,
     {aggregate_expression} AS value
 FROM {database}.{schema}.{table}
+{where_clause}
 GROUP BY 1
 ORDER BY value {direction}
 {limit_clause}
@@ -68,12 +90,15 @@ ORDER BY value {direction}
             operator = plan.threshold_operator or ">"
             group_expr = f"LEFT({geo_col}, 5)" if plan.geography_level == "county" else f"LEFT({geo_col}, 2)"
             id_alias = "county_fips" if plan.geography_level == "county" else "state_fips"
-            where_clause = ""
+            where_conditions = []
+            parameters = {"threshold_value": plan.threshold_value}
             if plan.geography_level == "county" and plan.geography_filters:
-                where_clause = f'\nWHERE LEFT({geo_col}, 2) = %(parent_state_fips)s'
-                plan.parameters = {"parent_state_fips": plan.geography_filters[0]["fips"], "threshold_value": plan.threshold_value}
-            else:
-                plan.parameters = {"threshold_value": plan.threshold_value}
+                where_conditions.append(f"LEFT({geo_col}, 2) = %(parent_state_fips)s")
+                parameters["parent_state_fips"] = plan.geography_filters[0]["fips"]
+            elif plan.geography_level == "state":
+                where_conditions.append(self._state_scope_filter(geo_col))
+            where_clause = f"\nWHERE {' AND '.join(where_conditions)}" if where_conditions else ""
+            plan.parameters = parameters
             sql = f"""
 SELECT
     {group_expr} AS {id_alias},

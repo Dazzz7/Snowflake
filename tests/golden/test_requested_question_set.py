@@ -4,6 +4,7 @@ from app.agent.orchestrator import CensusChatAgent
 from app.agent.context_resolver import resolve_context
 from app.agent.intent_parser import IntentParser
 from app.agent.query_planner import QueryPlanner
+from app.agent.response_generator import _metric_label
 from app.config import settings
 from app.memory.conversation_state import ConversationState
 
@@ -47,7 +48,7 @@ def test_requested_question_set_plans_without_demo_data():
         assert plan is not None, question
         assert plan.query_type == question_type, question
         if metric:
-            assert plan.metric.display_name == metric, question
+            assert _metric_label(plan) == metric, question
         result_rows = [{"STATE_FIPS": "06", "VALUE": 1}]
         state.remember(
             intent.metric,

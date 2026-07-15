@@ -89,6 +89,8 @@ class IntentParser:
         limit = self._limit_from_text(lowered)
         rank = self._rank_from_text(lowered)
         threshold_operator, threshold_value = self._threshold_from_text(lowered)
+        age_min, age_max = self._age_range_from_text(lowered)
+        value_kind = "percentage" if re.search(r"\b(percentage|percent|share|rate)\b", lowered) else "count"
         dimension = None
         if re.search(r"\b(age|age distribution|by age)\b", lowered):
             dimension = "age"
@@ -104,20 +106,16 @@ class IntentParser:
                 needs_clarification=True,
                 clarification_question="Do you mean median household income, per-capita income, family income, or another income measure?",
             )
-        has_65_plus_language = re.search(r"(65\+|65 and older|older than 65|greater than 65\s+age|over 65|senior|elderly|old people)", lowered)
-        if dimension == "age" and not has_65_plus_language:
+        if age_min is not None or age_max is not None:
+            dimension = "age"
+            metric = "population_by_age"
+            if threshold_value in {age_min, age_max, (age_max + 1 if age_max is not None else None)}:
+                threshold_operator = None
+                threshold_value = None
+        elif dimension == "age":
             metric = "population_by_age"
         if dimension == "race":
             metric = "population_by_race"
-        if has_65_plus_language:
-            if "percentage" in lowered or "percent" in lowered or "share" in lowered:
-                metric = "population_65_plus_percentage"
-            else:
-                metric = "population_65_plus"
-            dimension = "age"
-            if threshold_value == 65:
-                threshold_operator = None
-                threshold_value = None
 
         if not metric:
             return QueryIntent(
@@ -130,7 +128,10 @@ class IntentParser:
                 clarification_question="Which Census measure do you mean: total population, households, or median household income?",
             )
         intent = "aggregate_metric"
-        if metric in {"population_by_age", "population_by_race"} and geographies:
+        if metric == "population_by_age" and geographies and age_min is None and age_max is None:
+            intent = "breakdown"
+            operation_type = "breakdown"
+        elif metric == "population_by_race" and geographies:
             intent = "breakdown"
             operation_type = "breakdown"
         elif threshold_operator and geography_level:
@@ -185,6 +186,9 @@ class IntentParser:
             threshold_operator=threshold_operator,
             threshold_value=threshold_value,
             dimension=dimension,
+            age_min=age_min,
+            age_max=age_max,
+            value_kind=value_kind if dimension == "age" and (age_min is not None or age_max is not None) else None,
         )
 
     def _metric_from_text(self, lowered: str) -> str | None:
@@ -236,6 +240,37 @@ class IntentParser:
             if re.search(rf"\b{word}\b", lowered):
                 return value
         return None
+
+    def _age_range_from_text(self, lowered: str) -> tuple[int | None, int | None]:
+        plus_match = re.search(r"\b(\d{1,3})\s*\+\b", lowered)
+        if plus_match:
+            return int(plus_match.group(1)), None
+
+        older_match = re.search(
+            r"\b(?:age|ages|aged|people age|residents age)?\s*(\d{1,3})\s*(?:and older|or older|and over|or over|plus)\b",
+            lowered,
+        )
+        if older_match:
+            return int(older_match.group(1)), None
+
+        over_match = re.search(r"\b(?:over|older than|greater than|above)\s+(\d{1,3})\b", lowered)
+        if over_match and re.search(r"\b(age|ages|older|residents|people|population|percent|percentage|share)\b", lowered):
+            return int(over_match.group(1)), None
+
+        under_match = re.search(r"\b(?:under|younger than|less than|below)\s+(\d{1,3})\b", lowered)
+        if under_match and re.search(r"\b(age|ages|younger|residents|people|population|percent|percentage|share)\b", lowered):
+            return None, int(under_match.group(1)) - 1
+
+        range_match = re.search(r"\b(?:age|ages|aged)?\s*(\d{1,3})\s*(?:to|-)\s*(\d{1,3})\b", lowered)
+        if range_match and re.search(r"\b(age|ages|aged|residents|people|population)\b", lowered):
+            low = int(range_match.group(1))
+            high = int(range_match.group(2))
+            return min(low, high), max(low, high)
+
+        if re.search(r"\b(senior|seniors|elderly|older adults|old people)\b", lowered):
+            return 65, None
+
+        return None, None
 
     def _threshold_from_text(self, lowered: str) -> tuple[str | None, float | None]:
         match = re.search(r"\b(more than|over|above|greater than)\s+\$?([\d,.]+)\s*(million|m)?\b", lowered)

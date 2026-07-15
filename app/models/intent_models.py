@@ -29,6 +29,9 @@ class QueryIntent:
     threshold_operator: str | None = None
     threshold_value: float | None = None
     dimension: str | None = None
+    age_min: int | None = None
+    age_max: int | None = None
+    value_kind: str | None = None
     needs_clarification: bool = False
     clarification_question: str | None = None
     unsupported_reason: str | None = None

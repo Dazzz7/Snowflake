@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.catalog.age_bands import age_range_label, columns_for_age_range
 from app.catalog.geography import load_counties, load_states
 from app.models.query_models import QueryPlan
 from app.models.response_models import AgentResponse, QueryResult
@@ -34,19 +35,55 @@ def _ordinal(value: int) -> str:
     return f"{value}{suffix}"
 
 
+def _metric_label(plan: QueryPlan) -> str:
+    if plan.metric.metric_id == "population_by_age" and (plan.age_min is not None or plan.age_max is not None):
+        label = age_range_label(plan.age_min, plan.age_max)
+        if plan.value_kind == "percentage":
+            return f"Percentage of residents {label}"
+        return f"Population {label}"
+    return plan.metric.display_name
+
+
+def _metric_unit(plan: QueryPlan) -> str:
+    if plan.metric.metric_id == "population_by_age" and plan.value_kind == "percentage":
+        return "%"
+    return plan.metric.unit
+
+
+def _source_columns(plan: QueryPlan) -> list[str]:
+    if plan.metric.metric_id == "population_by_age" and (plan.age_min is not None or plan.age_max is not None):
+        columns = columns_for_age_range(plan.age_min, plan.age_max)
+        if plan.value_kind == "percentage":
+            return [*columns, "B01003e1"]
+        return columns
+    return plan.metric.source_columns or plan.metric.estimate_columns
+
+
+def _calculation(plan: QueryPlan) -> str:
+    if plan.metric.metric_id == "population_by_age" and (plan.age_min is not None or plan.age_max is not None):
+        return "dynamic_age_percentage" if plan.value_kind == "percentage" else "dynamic_age_count"
+    return plan.metric.calculation
+
+
+def _state_name(state_lookup: dict[str, str], fips: object) -> str:
+    return state_lookup.get(str(fips), "Unknown state")
+
+
 class ResponseGenerator:
     def generate(self, question: str, plan: QueryPlan, result: QueryResult) -> AgentResponse:
         state_lookup = {meta["state_fips"]: name for name, meta in load_states().items()}
         county_lookup = load_counties()
         rows = result.rows
+        metric_label = _metric_label(plan)
+        metric_unit = _metric_unit(plan)
         if plan.query_type == "comparison":
             parts = []
             for row in rows:
                 name = row.get("GEOGRAPHY_NAME") or row.get("geography_name")
                 fips = row.get("STATE_FIPS") or row.get("state_fips")
                 value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                geography_name = name or state_lookup.get(str(fips), str(fips))
-                parts.append(f"{geography_name}: {_format_value_with_unit(value, plan.metric.unit)}")
+                geography_name = name or _state_name(state_lookup, fips)
+                parts.append(f"{geography_name}: {_format_value_with_unit(value, metric_unit)}")
             answer = f"Using the available {plan.metric.year} Census dataset, " + "; ".join(parts) + "."
         elif plan.query_type == "ranking":
             visible_rows = rows
@@ -54,27 +91,27 @@ class ResponseGenerator:
                 row = visible_rows[0]
                 fips = row.get("STATE_FIPS") or row.get("state_fips")
                 value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                state_name = state_lookup.get(str(fips), str(fips))
+                state_name = _state_name(state_lookup, fips)
                 answer = (
                     f"{state_name} ranks {_ordinal(plan.result_rank)}, with approximately "
-                    + f"{_format_value_with_unit(value, plan.metric.unit, approximate=True)} in the same {plan.metric.year} dataset."
+                    + f"{_format_value_with_unit(value, metric_unit, approximate=True)} in the same {plan.metric.year} dataset."
                 )
             elif plan.row_limit == 1 and visible_rows:
                 row = visible_rows[0]
                 fips = row.get("STATE_FIPS") or row.get("state_fips")
                 value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                state_name = state_lookup.get(str(fips), str(fips))
+                state_name = _state_name(state_lookup, fips)
                 adjective = "lowest" if plan.sort_direction == "ascending" else "highest"
                 answer = (
-                    f"{state_name} has the {adjective} {plan.metric.display_name.lower()} among US states "
-                    + f"in the available {plan.metric.year} dataset, with approximately {_format_value_with_unit(value, plan.metric.unit, approximate=True)}."
+                    f"{state_name} has the {adjective} {metric_label.lower()} among US states "
+                    + f"in the available {plan.metric.year} dataset, with approximately {_format_value_with_unit(value, metric_unit, approximate=True)}."
                 )
             else:
                 parts = []
                 for index, row in enumerate(visible_rows, start=1):
                     fips = row.get("STATE_FIPS") or row.get("state_fips")
                     value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                    parts.append(f"{index}. {state_lookup.get(str(fips), str(fips))} ({_format_value_with_unit(value, plan.metric.unit)})")
+                    parts.append(f"{index}. {_state_name(state_lookup, fips)} ({_format_value_with_unit(value, metric_unit)})")
                 answer = f"Using the available {plan.metric.year} Census dataset: " + " ".join(parts)
         elif plan.query_type == "filter":
             parts = []
@@ -82,13 +119,13 @@ class ResponseGenerator:
                 fips = row.get("STATE_FIPS") or row.get("state_fips")
                 county_fips = row.get("COUNTY_FIPS") or row.get("county_fips")
                 value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                geography_name = county_lookup.get(str(county_fips), str(county_fips)) if county_fips else state_lookup.get(str(fips), str(fips))
-                parts.append(f"{geography_name} ({_format_number(value)})")
+                geography_name = county_lookup.get(str(county_fips), "Unknown county") if county_fips else _state_name(state_lookup, fips)
+                parts.append(f"{geography_name} ({_format_value_with_unit(value, metric_unit)})")
             comparator = "more than" if plan.threshold_operator == ">" else "less than"
             geography_label = "counties" if plan.geography_level == "county" else "states"
             answer = (
                 f"Using the available {plan.metric.year} Census dataset, these {geography_label} have {comparator} "
-                + f"{_format_value_with_unit(plan.threshold_value or 0, plan.metric.unit)}: "
+                + f"{_format_value_with_unit(plan.threshold_value or 0, metric_unit)}: "
                 + ", ".join(parts)
                 + "."
             )
@@ -128,15 +165,15 @@ class ResponseGenerator:
             geography = plan.geography_filters[0]["name"]
             answer = (
                 f"Using the available {plan.metric.year} Census dataset, {geography}'s "
-                f"{plan.metric.display_name.lower()} was {_format_value_with_unit(value, plan.metric.unit)}."
+                f"{metric_label.lower()} was {_format_value_with_unit(value, metric_unit)}."
             )
         interpretation = {
                 "question": question,
-                "metric": plan.metric.display_name,
+                "metric": metric_label,
                 "year": plan.metric.year,
                 "source_table": plan.metric.table,
-                "source_columns": plan.metric.source_columns or plan.metric.estimate_columns,
-                "calculation": plan.metric.calculation,
+                "source_columns": _source_columns(plan),
+                "calculation": _calculation(plan),
                 "operation": plan.interpretation,
                 "question_type": plan.query_type,
                 "geography_level": plan.geography_level,
@@ -146,6 +183,9 @@ class ResponseGenerator:
                 "rank": plan.result_rank,
                 "threshold": plan.threshold_value,
                 "dimension": plan.dimension,
+                "age_min": plan.age_min,
+                "age_max": plan.age_max,
+                "value_kind": plan.value_kind,
                 "llm_attempted": plan.llm_attempted,
                 "llm_succeeded": plan.llm_succeeded,
                 "llm_provider": plan.llm_provider,
