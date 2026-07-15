@@ -1,4 +1,5 @@
 from app.agent.narrow_llm_agent import NarrowLLMCensusAgent
+from app.agent.narrow_sql_safety import normalize_snowflake_identifiers
 from app.models.response_models import QueryResult
 
 
@@ -81,3 +82,17 @@ def test_narrow_agent_runs_llm_sql_flow(monkeypatch):
     assert response.interpretation["llm_attempted"] is True
     assert response.interpretation["metadata_request"]["query"] == "total population"
     assert "B01003e1" in response.sql
+
+
+def test_normalizes_llm_sql_identifiers_for_snowflake():
+    sql = """
+SELECT SUM(B02001e1) AS total_population
+FROM US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET.PUBLIC.2020_CBG_B02
+WHERE LEFT(CENSUS_BLOCK_GROUP, 2) = %(state_fips)s
+"""
+
+    normalized = normalize_snowflake_identifiers(sql)
+
+    assert '"B02001e1"' in normalized
+    assert '"CENSUS_BLOCK_GROUP"' in normalized
+    assert '"US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET"."PUBLIC"."2020_CBG_B02"' in normalized

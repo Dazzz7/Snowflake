@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from app.agent.hosted_llm_client import HostedLLMClient
-from app.agent.narrow_sql_safety import enforce_row_limit, validate_narrow_sql
+from app.agent.narrow_sql_safety import enforce_row_limit, normalize_snowflake_identifiers, validate_narrow_sql
 from app.agent.narrow_tools import (
     describe_table,
     enrich_geography_names,
@@ -56,27 +56,35 @@ class NarrowLLMCensusAgent:
         metadata = search_metadata(metadata_query, self._safe_int(metadata_request.get("top_k"), 20))
         candidate_tables = self._candidate_tables(metadata_request, metadata)
         table_descriptions = [describe_table(table) for table in candidate_tables]
-        samples = [
-            inspect_sample_rows(
-                item["table_name"],
-                ["CENSUS_BLOCK_GROUP", *[column["column_name"] for column in item.get("columns", [])[1:4]]],
-                limit=3,
+        compact_descriptions = self._compact_table_descriptions(table_descriptions, metadata, resolved_question)
+        samples = []
+        for item in compact_descriptions:
+            if item.get("error"):
+                continue
+            sample_columns = [
+                column["column_name"]
+                for column in item.get("columns", [])
+                if column.get("column_name") != "CENSUS_BLOCK_GROUP"
+            ][:3]
+            samples.append(
+                inspect_sample_rows(
+                    item["table_name"],
+                    ["CENSUS_BLOCK_GROUP", *sample_columns],
+                    limit=3,
+                )
             )
-            for item in table_descriptions
-            if not item.get("error")
-        ]
         geography = lookup_geography(str(scope.get("geography_query") or scope.get("default_geography") or resolved_question))
 
         sql_payload = self._generate_sql(
             resolved_question=resolved_question,
             scope=scope,
             metadata=metadata,
-            table_descriptions=table_descriptions,
+            table_descriptions=compact_descriptions,
             sample_rows=samples,
             geography=geography,
             retry_feedback=None,
         )
-        sql = str(sql_payload.get("sql") or "").strip()
+        sql = normalize_snowflake_identifiers(str(sql_payload.get("sql") or "").strip())
         sql = enforce_row_limit(sql)
         validation = validate_narrow_sql(sql)
         if not validation.is_valid:
@@ -84,12 +92,12 @@ class NarrowLLMCensusAgent:
                 resolved_question=resolved_question,
                 scope=scope,
                 metadata=metadata,
-                table_descriptions=table_descriptions,
+                table_descriptions=compact_descriptions,
                 sample_rows=samples,
                 geography=geography,
                 retry_feedback=validation.reason,
             )
-            sql = enforce_row_limit(str(sql_payload.get("sql") or "").strip())
+            sql = enforce_row_limit(normalize_snowflake_identifiers(str(sql_payload.get("sql") or "").strip()))
             validation = validate_narrow_sql(sql)
         if not validation.is_valid:
             return AgentResponse(
@@ -103,6 +111,7 @@ class NarrowLLMCensusAgent:
                     "metadata_request": metadata_request,
                     "sql_validation_error": validation.reason,
                     "sql_payload": sql_payload,
+                    "llm_last_error": getattr(self.llm, "last_error", None),
                 },
                 sql=sql or None,
             )
@@ -125,7 +134,7 @@ class NarrowLLMCensusAgent:
                 sql=sql,
             )
 
-        answer = self._generate_answer(resolved_question, scope, sql_payload, result.rows, table_descriptions)
+        answer = self._generate_answer(resolved_question, scope, sql_payload, result.rows, compact_descriptions)
         self._remember(state, resolved_question, answer, result.rows, sql_payload)
         return AgentResponse(
             answer=answer,
@@ -137,7 +146,7 @@ class NarrowLLMCensusAgent:
                 "scope_decision": scope,
                 "metadata_request": metadata_request,
                 "metadata_results": metadata.get("results", [])[:12],
-                "described_tables": [item.get("table_name") for item in table_descriptions],
+                "described_tables": [item.get("table_name") for item in compact_descriptions],
                 "sql_payload": sql_payload,
             },
             evidence={
@@ -255,7 +264,39 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
                 for item in table_descriptions
             ],
         }
-        return self.llm.generate_text(system, json.dumps(user, default=str)) or "I queried Snowflake successfully, but the LLM did not return a final answer."
+        generated = self.llm.generate_text(system, json.dumps(user, default=str))
+        if generated:
+            return generated
+        return self._fallback_answer(resolved_question, rows)
+
+    def _fallback_answer(self, resolved_question: str, rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            return "The Snowflake query completed, but it returned no rows for this Census question."
+
+        first_row = rows[0]
+        if len(rows) == 1:
+            values = ", ".join(
+                f"{str(key).replace('_', ' ')} = {self._format_value(value)}"
+                for key, value in first_row.items()
+            )
+            return f"Using the available 2020 Census data for '{resolved_question}', Snowflake returned: {values}."
+
+        preview = []
+        for row in rows[:10]:
+            preview.append(
+                "; ".join(
+                    f"{str(key).replace('_', ' ')} = {self._format_value(value)}"
+                    for key, value in row.items()
+                )
+            )
+        return f"Using the available 2020 Census data for '{resolved_question}', Snowflake returned {len(rows)} rows. Top rows: " + " | ".join(preview)
+
+    def _format_value(self, value: Any) -> str:
+        if isinstance(value, int):
+            return f"{value:,}"
+        if isinstance(value, float):
+            return f"{value:,.2f}"
+        return str(value)
 
     def _candidate_tables(self, metadata_request: dict[str, Any], metadata: dict[str, Any]) -> list[str]:
         requested = [str(table).upper() for table in metadata_request.get("candidate_tables", [])]
@@ -265,6 +306,69 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
             if table and table not in tables:
                 tables.append(table)
         return tables[:3] or ["2020_CBG_B01", "2020_CBG_B02"]
+
+    def _compact_table_descriptions(
+        self,
+        table_descriptions: list[dict[str, Any]],
+        metadata: dict[str, Any],
+        question: str,
+    ) -> list[dict[str, Any]]:
+        selected_by_table: dict[str, set[str]] = {}
+        for row in metadata.get("results", [])[:25]:
+            table = str(row.get("table_name") or "").upper()
+            column = str(row.get("column_name") or "")
+            if table and column:
+                selected_by_table.setdefault(table, set()).add(column.upper())
+
+        lowered = question.lower()
+        compact = []
+        for table in table_descriptions:
+            table_name = str(table.get("table_name") or "").upper()
+            keep_columns = {"CENSUS_BLOCK_GROUP", *selected_by_table.get(table_name, set())}
+            if table_name == "2020_CBG_B01":
+                if any(term in lowered for term in ["population", "people", "resident"]):
+                    keep_columns.update({"B01003E1", "B01001E1"})
+                if any(term in lowered for term in ["male", "female", "sex", "men", "women"]):
+                    keep_columns.update({"B01001E2", "B01001E26"})
+                if any(term in lowered for term in ["age", "older", "over", "under", "65", "18"]):
+                    keep_columns.update(f"B01001E{index}" for index in range(1, 50))
+            if table_name == "2020_CBG_B02":
+                keep_columns.update(f"B02001E{index}" for index in range(1, 9))
+            if table_name == "2020_METADATA_CBG_GEOGRAPHIC_DATA":
+                keep_columns.update({"AMOUNT_LAND", "AMOUNT_WATER", "LATITUDE", "LONGITUDE"})
+
+            columns = []
+            for column in table.get("columns", []):
+                column_name = str(column.get("column_name") or "")
+                if column_name.upper() not in keep_columns:
+                    continue
+                columns.append(
+                    {
+                        "column_name": column_name,
+                        "label": self._short_label(str(column.get("label") or "")),
+                        "concept": column.get("concept"),
+                        "universe": column.get("universe"),
+                    }
+                )
+            compact.append(
+                {
+                    "table_name": table_name,
+                    "description": table.get("description"),
+                    "geography_column": table.get("geography_column"),
+                    "columns": columns[:60],
+                    "error": table.get("error"),
+                }
+            )
+        return compact
+
+    def _short_label(self, label: str) -> str:
+        for prefix in [
+            "Estimate: SEX BY AGE: ",
+            "Estimate: RACE: ",
+            "Estimate: TOTAL POPULATION: ",
+        ]:
+            label = label.replace(prefix, "")
+        return label[:220]
 
     def _safe_int(self, value: Any, default: int) -> int:
         try:

@@ -29,6 +29,42 @@ APPROVED_TABLES = {
     "2020_METADATA_CBG_GEOGRAPHIC_DATA",
 }
 
+APPROVED_COLUMNS = {
+    "CENSUS_BLOCK_GROUP",
+    "B01003e1",
+    "AMOUNT_LAND",
+    "AMOUNT_WATER",
+    "LATITUDE",
+    "LONGITUDE",
+    *{f"B01001e{index}" for index in range(1, 50)},
+    *{f"B02001e{index}" for index in range(1, 11)},
+}
+
+
+def normalize_snowflake_identifiers(sql: str) -> str:
+    normalized = sql
+    database = settings.snowflake_database
+    schema = settings.snowflake_schema
+
+    for table in sorted(APPROVED_TABLES, key=len, reverse=True):
+        quoted_table = f'"{database}"."{schema}"."{table}"'
+        patterns = [
+            rf'(?<!")\b{re.escape(database)}\s*\.\s*{re.escape(schema)}\s*\.\s*{re.escape(table)}\b(?!")',
+            rf'(?<!")\b{re.escape(schema)}\s*\.\s*{re.escape(table)}\b(?!")',
+            rf'(?<!")\b{re.escape(table)}\b(?!")',
+        ]
+        for pattern in patterns:
+            normalized = re.sub(pattern, quoted_table, normalized, flags=re.IGNORECASE)
+
+    for column in sorted(APPROVED_COLUMNS, key=len, reverse=True):
+        normalized = re.sub(
+            rf'(?<!")\b{re.escape(column)}\b(?!")',
+            f'"{column}"',
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    return normalized
+
 
 def validate_narrow_sql(sql: str) -> ValidationResult:
     stripped = sql.strip()

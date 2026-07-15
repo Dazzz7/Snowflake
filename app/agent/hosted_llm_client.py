@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -23,9 +24,12 @@ class HostedLLMClient:
         self.api_key = api_key if api_key is not None else settings.llm_api_key
         self.model = model or settings.llm_model
         self.timeout_seconds = timeout_seconds or settings.llm_timeout_seconds
+        self.last_error: str | None = None
 
     def _chat(self, messages: list[dict[str, str]], temperature: float = 0.0) -> str | None:
+        self.last_error = None
         if not self.base_url or not self.model:
+            self.last_error = "LLM base URL or model is not configured."
             return None
         payload = {
             "model": self.model,
@@ -33,7 +37,11 @@ class HostedLLMClient:
             "temperature": temperature,
         }
         data = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "us-census-data-assistant/1.0",
+        }
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         req = urllib.request.Request(
@@ -42,12 +50,34 @@ class HostedLLMClient:
             headers=headers,
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
-                body = json.loads(response.read().decode("utf-8"))
-                return body.get("choices", [{}])[0].get("message", {}).get("content")
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, IndexError):
-            return None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout_seconds) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                    message = body.get("choices", [{}])[0].get("message", {})
+                    content = message.get("content")
+                    if isinstance(content, list):
+                        return "".join(
+                            item.get("text", "") if isinstance(item, dict) else str(item)
+                            for item in content
+                        )
+                    return content
+            except urllib.error.HTTPError as exc:
+                self.last_error = f"LLM HTTP error {exc.code}."
+                if exc.code == 429 and attempt < 2:
+                    time.sleep(4 * (attempt + 1))
+                    continue
+                return None
+            except urllib.error.URLError as exc:
+                self.last_error = f"LLM connection error: {exc.reason}."
+                return None
+            except TimeoutError:
+                self.last_error = "LLM request timed out."
+                return None
+            except (json.JSONDecodeError, IndexError, KeyError, TypeError) as exc:
+                self.last_error = f"LLM response parse error: {type(exc).__name__}."
+                return None
+        return None
 
     def generate_json(self, system: str, user: str) -> dict[str, Any] | None:
         content = self._chat(
