@@ -41,7 +41,7 @@ class SQLValidator:
         if settings.snowflake_database.lower() not in lowered:
             return ValidationResult(False, "The query does not use the approved database.")
 
-        metric = load_metrics()[plan.metric.metric_id]
+        metric = load_metrics().get(plan.metric.metric_id, plan.metric)
         if plan.query_type == "age_breakdown":
             required_identifiers = [
                 "2020_CBG_B01",
@@ -67,6 +67,12 @@ class SQLValidator:
                 "TOP_BRANDS",
                 "RAW_VISIT_COUNT",
                 "RAW_VISITOR_COUNT",
+            ]
+        elif metric.metric_id.startswith("dynamic_"):
+            required_identifiers = [
+                metric.table,
+                metric.geography_column,
+                *(metric.source_columns or metric.estimate_columns),
             ]
         elif metric.metric_id == "population_by_age" and (plan.age_min is not None or plan.age_max is not None):
             required_identifiers = [metric.table, metric.geography_column, *columns_for_age_range(plan.age_min, plan.age_max)]

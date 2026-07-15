@@ -52,11 +52,16 @@ class ResultValidator:
             if isinstance(value, (int, float)) and value < 0:
                 return ValidationResult(False, "The query returned an implausible negative value.")
             if plan.query_type == "ranking":
-                state_fips = row.get("STATE_FIPS") or row.get("state_fips")
-                if not state_fips:
-                    return ValidationResult(False, "The ranking result did not include a state identifier.")
-                if str(state_fips) not in state_fips_values:
-                    return ValidationResult(False, "The ranking result included a geography outside the approved state scope.")
+                if plan.geography_level == "county":
+                    county_fips = row.get("COUNTY_FIPS") or row.get("county_fips")
+                    if not county_fips:
+                        return ValidationResult(False, "The county ranking result did not include a county identifier.")
+                else:
+                    state_fips = row.get("STATE_FIPS") or row.get("state_fips")
+                    if not state_fips:
+                        return ValidationResult(False, "The ranking result did not include a state identifier.")
+                    if str(state_fips) not in state_fips_values:
+                        return ValidationResult(False, "The ranking result included a geography outside the approved state scope.")
             if plan.query_type == "filter" and plan.geography_level == "state":
                 state_fips = row.get("STATE_FIPS") or row.get("state_fips")
                 if not state_fips or str(state_fips) not in state_fips_values:

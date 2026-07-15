@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.agent.context_resolver import resolve_context
+from app.agent.dynamic_semantic_layer import DynamicSemanticLayer
 from app.agent.intent_parser import IntentParser
 from app.agent.query_planner import QueryPlanner
 from app.agent.response_generator import ResponseGenerator
@@ -25,6 +26,7 @@ class CensusChatAgent:
         self.executor = SnowflakeQueryExecutor()
         self.result_validator = ResultValidator()
         self.response_generator = ResponseGenerator()
+        self.dynamic_semantic_layer = DynamicSemanticLayer()
 
     def answer(self, question: str, session_id: str) -> AgentResponse:
         state = session_store.get(session_id)
@@ -104,9 +106,17 @@ class CensusChatAgent:
                 interpretation={"reason": scope.reason},
             )
 
+        if self._should_try_dynamic_semantic_first(resolved_question):
+            dynamic_response = self._try_dynamic_semantic_plan(resolved_question)
+            if dynamic_response:
+                return dynamic_response
+
         intent = self.intent_parser.parse(resolved_question)
         plan, plan_validation = self.query_planner.create_plan(intent)
         if not plan_validation.is_valid or plan is None:
+            dynamic_response = self._try_dynamic_semantic_plan(resolved_question)
+            if dynamic_response:
+                return dynamic_response
             schema_response = self._metadata_fallback_response(resolved_question, plan_validation.reason)
             if schema_response:
                 return schema_response
@@ -158,6 +168,50 @@ class CensusChatAgent:
             result_rows=result.rows,
         )
         return self.response_generator.generate(resolved_question, plan, result)
+
+    def _try_dynamic_semantic_plan(self, question: str) -> AgentResponse | None:
+        plan, validation, diagnostics = self.dynamic_semantic_layer.create_plan(question)
+        if not validation.is_valid or plan is None:
+            return None
+        plan = self.sql_generator.generate(plan)
+        sql_validation = self.sql_validator.validate(plan)
+        if not sql_validation.is_valid:
+            return AgentResponse(
+                answer="I found matching live metadata, but the generated dynamic plan did not pass SQL validation.",
+                status="invalid_sql",
+                interpretation={
+                    "question_type": "dynamic_semantic_plan",
+                    "reason": sql_validation.reason,
+                    "dynamic_semantic_diagnostics": diagnostics,
+                },
+                sql=plan.sql,
+            )
+        result = self.executor.execute(plan.sql or "", plan.parameters)
+        result_validation = self.result_validator.validate(plan, result)
+        if not result_validation.is_valid:
+            return AgentResponse(
+                answer=result_validation.reason or "The dynamic Census query did not produce a valid result.",
+                status="invalid_result",
+                interpretation={
+                    "question_type": "dynamic_semantic_plan",
+                    "reason": result_validation.reason,
+                    "dynamic_semantic_diagnostics": diagnostics,
+                },
+                sql=plan.sql,
+            )
+        response = self.response_generator.generate(question, plan, result)
+        response.interpretation["dynamic_semantic_layer"] = {
+            "used": True,
+            "schema_query_id": diagnostics.get("schema_query_id"),
+            "eligible_candidates": diagnostics.get("eligible_candidates"),
+            "validated_contract": diagnostics.get("validated_contract"),
+        }
+        response.evidence["dynamic_semantic_layer"] = {
+            "used": True,
+            "contract": diagnostics.get("validated_contract"),
+            "schema_matches": diagnostics.get("eligible_candidates"),
+        }
+        return response
 
     def _is_capability_question(self, question: str) -> bool:
         lowered = question.lower()
@@ -217,6 +271,22 @@ class CensusChatAgent:
                 "answer_policy": "metadata_bound",
             },
         )
+
+    def _should_try_dynamic_semantic_first(self, question: str) -> bool:
+        lowered = question.lower()
+        dynamic_terms = [
+            "raw visit",
+            "visitor count",
+            "visit count",
+            "distance from home",
+            "top brand",
+            "top brands",
+            "same day brand",
+            "same month brand",
+            "popularity by",
+            "amount land",
+        ]
+        return any(term in lowered for term in dynamic_terms)
 
     def _is_geography_correction(self, question: str) -> bool:
         lowered = question.lower().strip(" .")

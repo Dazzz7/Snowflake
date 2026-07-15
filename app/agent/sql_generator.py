@@ -168,10 +168,19 @@ ORDER BY avg_distance_from_home_meters DESC
         if plan.query_type == "ranking":
             direction = "ASC" if plan.sort_direction == "ascending" else "DESC"
             limit_clause = f"LIMIT 1 OFFSET {plan.result_rank - 1}" if plan.result_rank else f"LIMIT {plan.row_limit or 10}"
-            where_clause = f"WHERE {self._state_scope_filter(geo_col)}"
+            group_expr = f"LEFT({geo_col}, 5)" if plan.geography_level == "county" else f"LEFT({geo_col}, 2)"
+            id_alias = "county_fips" if plan.geography_level == "county" else "state_fips"
+            where_conditions = []
+            parameters = {}
+            if plan.geography_filters:
+                where_clause_text, parameters = self._selected_geography_filter(plan, geo_col)
+                where_conditions.append(where_clause_text)
+            elif plan.geography_level == "state":
+                where_conditions.append(self._state_scope_filter(geo_col))
+            where_clause = f"WHERE {' AND '.join(where_conditions)}" if where_conditions else ""
             sql = f"""
 SELECT
-    LEFT({geo_col}, 2) AS state_fips,
+    {group_expr} AS {id_alias},
     {aggregate_expression} AS value
 FROM {database}.{schema}.{table}
 {where_clause}
@@ -179,6 +188,7 @@ GROUP BY 1
 ORDER BY value {direction}
 {limit_clause}
 """.strip()
+            plan.parameters = parameters
             plan.sql = sql
             return plan
 

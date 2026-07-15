@@ -76,6 +76,14 @@ def _state_name(state_lookup: dict[str, str], fips: object) -> str:
     return state_lookup.get(str(fips), "Unknown state")
 
 
+def _ranked_geography_name(plan: QueryPlan, state_lookup: dict[str, str], county_lookup: dict[str, str], row: dict) -> str:
+    county_fips = row.get("COUNTY_FIPS") or row.get("county_fips")
+    if plan.geography_level == "county" and county_fips:
+        return county_lookup.get(str(county_fips), "Unknown county")
+    fips = row.get("STATE_FIPS") or row.get("state_fips")
+    return _state_name(state_lookup, fips)
+
+
 class ResponseGenerator:
     def generate(self, question: str, plan: QueryPlan, result: QueryResult) -> AgentResponse:
         state_lookup = {meta["state_fips"]: name for name, meta in load_states().items()}
@@ -96,29 +104,27 @@ class ResponseGenerator:
             visible_rows = rows
             if plan.result_rank and visible_rows:
                 row = visible_rows[0]
-                fips = row.get("STATE_FIPS") or row.get("state_fips")
                 value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                state_name = _state_name(state_lookup, fips)
+                geography_name = _ranked_geography_name(plan, state_lookup, county_lookup, row)
                 answer = (
-                    f"{state_name} ranks {_ordinal(plan.result_rank)}, with approximately "
+                    f"{geography_name} ranks {_ordinal(plan.result_rank)}, with approximately "
                     + f"{_format_value_with_unit(value, metric_unit, approximate=True)} in the same {plan.metric.year} dataset."
                 )
             elif plan.row_limit == 1 and visible_rows:
                 row = visible_rows[0]
-                fips = row.get("STATE_FIPS") or row.get("state_fips")
                 value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                state_name = _state_name(state_lookup, fips)
+                geography_name = _ranked_geography_name(plan, state_lookup, county_lookup, row)
                 adjective = "lowest" if plan.sort_direction == "ascending" else "highest"
+                geography_scope = "US counties" if plan.geography_level == "county" else "US states"
                 answer = (
-                    f"{state_name} has the {adjective} {metric_label.lower()} among US states "
+                    f"{geography_name} has the {adjective} {metric_label.lower()} among {geography_scope} "
                     + f"in the available {plan.metric.year} dataset, with approximately {_format_value_with_unit(value, metric_unit, approximate=True)}."
                 )
             else:
                 parts = []
                 for index, row in enumerate(visible_rows, start=1):
-                    fips = row.get("STATE_FIPS") or row.get("state_fips")
                     value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                    parts.append(f"{index}. {_state_name(state_lookup, fips)} ({_format_value_with_unit(value, metric_unit)})")
+                    parts.append(f"{index}. {_ranked_geography_name(plan, state_lookup, county_lookup, row)} ({_format_value_with_unit(value, metric_unit)})")
                 answer = f"Using the available {plan.metric.year} Census dataset: " + " ".join(parts)
         elif plan.query_type == "filter":
             parts = []
