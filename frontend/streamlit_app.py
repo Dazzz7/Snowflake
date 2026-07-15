@@ -27,7 +27,8 @@ st.title(settings.app_name)
 
 with st.sidebar:
     st.subheader("Status")
-    st.write("Language parsing: deterministic catalog parser")
+    st.write("Language parsing: hosted LLM rewrite + deterministic validated planner")
+    st.write("Metadata: live Snowflake schema search + verified metric contracts")
     if settings.has_hosted_llm_config:
         st.write(f"Hosted LLM: `{settings.llm_model}`")
     elif settings.use_llm:
@@ -37,6 +38,8 @@ with st.sidebar:
     examples = [
         "What is the total population of California?",
         "Compare the populations of Texas and Florida",
+        "What fields do you have about shopping, brands, and distance?",
+        "Which high-income neighborhoods in NYC are traveling the farthest to do their shopping, and which retail brands do they visit most often?",
         "Top 10 states by population",
         "What about New York?",
     ]

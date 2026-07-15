@@ -8,7 +8,9 @@ from app.agent.result_validator import ResultValidator
 from app.agent.sql_generator import SQLGenerator
 from app.agent.sql_validator import SQLValidator
 from app.catalog.metric_registry import load_metrics, load_taxonomy
+from app.catalog.catalog_search import summarize_schema_matches
 from app.database.query_executor import SnowflakeQueryExecutor
+from app.database.schema_loader import search_columns_metadata
 from app.guardrails.input_guardrail import classify_input
 from app.memory.session_store import session_store
 from app.models.response_models import AgentResponse
@@ -42,11 +44,20 @@ class CensusChatAgent:
         if self._is_capability_question(resolved_question):
             taxonomy = load_taxonomy()
             metrics = load_metrics()
+            schema_result = search_columns_metadata(resolved_question, limit=12)
+            schema_matches = [] if schema_result.error else summarize_schema_matches(schema_result.rows, limit=12)
             category_text = " ".join(
                 f"{name.replace('_', ' ').title()}: {meta['description']}."
                 for name, meta in taxonomy.items()
                 if name != "geography"
             )
+            schema_text = ""
+            if schema_matches:
+                schema_text = (
+                    " I also searched the live Snowflake metadata for your wording and found fields such as "
+                    + "; ".join(f"{item['table']}.{item['column']} ({item['type']})" for item in schema_matches[:6])
+                    + "."
+                )
             return AgentResponse(
                 answer=(
                     "I can answer questions grounded in the available US Census data across several categories. "
@@ -56,6 +67,7 @@ class CensusChatAgent:
                     + ", ".join(metric.display_name for metric in metrics.values())
                     + ". I can perform lookups, comparisons, rankings, threshold filters, and demographic breakdowns "
                     + "across supported geographic levels. For ambiguous measures such as income, I will ask which definition you mean."
+                    + schema_text
                 ),
                 status="metadata",
                 interpretation={
@@ -64,6 +76,24 @@ class CensusChatAgent:
                     "supported_operations": ["lookup", "comparison", "ranking", "filter", "age_breakdown"],
                     "supported_geography_levels": ["state", "verified city county sets"],
                     "year": 2020,
+                    "live_schema_search_attempted": True,
+                    "live_schema_query_id": schema_result.query_id,
+                    "live_schema_error": schema_result.error,
+                },
+                evidence={
+                    "status": "metadata_verified" if schema_matches else "metadata_unavailable",
+                    "operation": {
+                        "operation": "search_live_schema_metadata",
+                        "query": resolved_question,
+                        "source": "Snowflake INFORMATION_SCHEMA.COLUMNS",
+                        "limit": 12,
+                    },
+                    "schema_matches": schema_matches,
+                    "provenance": {
+                        "query_id": schema_result.query_id,
+                        "source": "US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET.INFORMATION_SCHEMA.COLUMNS",
+                    },
+                    "answer_policy": "metadata_bound",
                 },
             )
         scope = classify_input(resolved_question)
@@ -77,6 +107,9 @@ class CensusChatAgent:
         intent = self.intent_parser.parse(resolved_question)
         plan, plan_validation = self.query_planner.create_plan(intent)
         if not plan_validation.is_valid or plan is None:
+            schema_response = self._metadata_fallback_response(resolved_question, plan_validation.reason)
+            if schema_response:
+                return schema_response
             return AgentResponse(
                 answer=plan_validation.reason or "I could not construct a reliable Census query for that question.",
                 status="needs_clarification" if intent.needs_clarification else "unsupported",
@@ -139,7 +172,50 @@ class CensusChatAgent:
                 "topics can i ask",
                 "which years are available",
                 "geographic levels",
+                "columns",
+                "fields",
+                "schema",
+                "metadata",
             ]
+        )
+
+    def _metadata_fallback_response(self, question: str, failure_reason: str | None) -> AgentResponse | None:
+        lowered = question.lower()
+        if not any(term in lowered for term in ["column", "field", "schema", "metadata", "available", "data about", "have about"]):
+            return None
+        schema_result = search_columns_metadata(question, limit=12)
+        if schema_result.error or not schema_result.rows:
+            return None
+        schema_matches = summarize_schema_matches(schema_result.rows, limit=12)
+        answer = (
+            "I could not map that to a pre-verified analytical plan yet, but I searched the live Snowflake metadata and found: "
+            + "; ".join(f"{item['table']}.{item['column']} ({item['type']})" for item in schema_matches[:8])
+            + ". I can use these metadata hits to build a validated analysis when the requested operation, geography, and aggregation are clear."
+        )
+        return AgentResponse(
+            answer=answer,
+            status="metadata",
+            interpretation={
+                "question_type": "metadata_fallback",
+                "planning_failure": failure_reason,
+                "live_schema_search_attempted": True,
+                "live_schema_query_id": schema_result.query_id,
+            },
+            evidence={
+                "status": "metadata_verified",
+                "operation": {
+                    "operation": "search_live_schema_metadata",
+                    "query": question,
+                    "source": "Snowflake INFORMATION_SCHEMA.COLUMNS",
+                    "limit": 12,
+                },
+                "schema_matches": schema_matches,
+                "provenance": {
+                    "query_id": schema_result.query_id,
+                    "source": "US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET.INFORMATION_SCHEMA.COLUMNS",
+                },
+                "answer_policy": "metadata_bound",
+            },
         )
 
     def _is_geography_correction(self, question: str) -> bool:
