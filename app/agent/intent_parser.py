@@ -289,14 +289,14 @@ class IntentParser:
         )
 
     def _geography_level_from_text(self, lowered: str, geographies: list) -> str | None:
+        if "block group" in lowered or "block groups" in lowered:
+            return "block_group"
         if "county" in lowered or "counties" in lowered:
             return "county"
         if "state" in lowered or "states" in lowered or "usa" in lowered or "u.s." in lowered or "us " in lowered:
             return "state"
         if "tract" in lowered:
             return "tract"
-        if "block group" in lowered:
-            return "block_group"
         if geographies:
             return geographies[0].type
         return None

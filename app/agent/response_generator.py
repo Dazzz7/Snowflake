@@ -77,6 +77,9 @@ def _state_name(state_lookup: dict[str, str], fips: object) -> str:
 
 
 def _ranked_geography_name(plan: QueryPlan, state_lookup: dict[str, str], county_lookup: dict[str, str], row: dict) -> str:
+    cbg = row.get("CENSUS_BLOCK_GROUP") or row.get("census_block_group")
+    if plan.geography_level == "block_group" and cbg:
+        return f"CBG {cbg}"
     county_fips = row.get("COUNTY_FIPS") or row.get("county_fips")
     if plan.geography_level == "county" and county_fips:
         return county_lookup.get(str(county_fips), "Unknown county")
@@ -115,7 +118,7 @@ class ResponseGenerator:
                 value = row.get("VALUE") if "VALUE" in row else row.get("value")
                 geography_name = _ranked_geography_name(plan, state_lookup, county_lookup, row)
                 adjective = "lowest" if plan.sort_direction == "ascending" else "highest"
-                geography_scope = "US counties" if plan.geography_level == "county" else "US states"
+                geography_scope = "US Census Block Groups" if plan.geography_level == "block_group" else ("US counties" if plan.geography_level == "county" else "US states")
                 answer = (
                     f"{geography_name} has the {adjective} {metric_label.lower()} among {geography_scope} "
                     + f"in the available {plan.metric.year} dataset, with approximately {_format_value_with_unit(value, metric_unit, approximate=True)}."
@@ -131,11 +134,15 @@ class ResponseGenerator:
             for row in rows:
                 fips = row.get("STATE_FIPS") or row.get("state_fips")
                 county_fips = row.get("COUNTY_FIPS") or row.get("county_fips")
+                cbg = row.get("CENSUS_BLOCK_GROUP") or row.get("census_block_group")
                 value = row.get("VALUE") if "VALUE" in row else row.get("value")
-                geography_name = county_lookup.get(str(county_fips), "Unknown county") if county_fips else _state_name(state_lookup, fips)
+                if plan.geography_level == "block_group" and cbg:
+                    geography_name = f"CBG {cbg}"
+                else:
+                    geography_name = county_lookup.get(str(county_fips), "Unknown county") if county_fips else _state_name(state_lookup, fips)
                 parts.append(f"{geography_name} ({_format_value_with_unit(value, metric_unit)})")
             comparator = "more than" if plan.threshold_operator == ">" else "less than"
-            geography_label = "counties" if plan.geography_level == "county" else "states"
+            geography_label = "Census Block Groups" if plan.geography_level == "block_group" else ("counties" if plan.geography_level == "county" else "states")
             answer = (
                 f"Using the available {plan.metric.year} Census dataset, these {geography_label} have {comparator} "
                 + f"{_format_value_with_unit(plan.threshold_value or 0, metric_unit)}: "

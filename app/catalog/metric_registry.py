@@ -12,6 +12,18 @@ ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_PATH = ROOT / "metadata" / "verified_metrics.json"
 VARIABLE_CATALOG_PATH = ROOT / "metadata" / "variable_catalog.json"
 TAXONOMY_PATH = ROOT / "metadata" / "taxonomy.json"
+METRIC_MATCH_STOPWORDS = {
+    "block",
+    "census",
+    "group",
+    "groups",
+    "over",
+    "under",
+    "which",
+    "what",
+    "have",
+    "with",
+}
 
 
 @lru_cache
@@ -27,7 +39,11 @@ def resolve_metric(text: str | None) -> MetricDefinition | None:
     if not text:
         return None
     normalized = text.lower().strip()
-    normalized_tokens = re.findall(r"[a-z0-9]+", normalized.replace("_", " "))
+    normalized_tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", normalized.replace("_", " "))
+        if token not in METRIC_MATCH_STOPWORDS
+    ]
     metrics = load_metrics()
     if normalized in metrics:
         return metrics[normalized]
@@ -44,7 +60,11 @@ def resolve_metric(text: str | None) -> MetricDefinition | None:
             elif normalized in candidate_lower:
                 score = max(score, 50)
             else:
-                words = {word for word in re.findall(r"[a-z0-9]+", candidate_lower.replace("_", " ")) if len(word) > 2}
+                words = {
+                    word
+                    for word in re.findall(r"[a-z0-9]+", candidate_lower.replace("_", " "))
+                    if len(word) > 2 and word not in METRIC_MATCH_STOPWORDS
+                }
                 score = max(score, len(words.intersection(normalized_tokens)))
         if score:
             scored.append((score, metric))

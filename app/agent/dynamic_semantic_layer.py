@@ -14,7 +14,7 @@ from app.models.query_models import MetricDefinition, QueryPlan, ValidationResul
 NUMERIC_TYPES = {"NUMBER", "FLOAT", "DOUBLE", "REAL", "DECIMAL", "INT", "INTEGER"}
 ALLOWED_AGGREGATIONS = {"sum", "avg", "approx_median"}
 ALLOWED_OPERATIONS = {"ranking", "aggregate_metric", "filter", "comparison"}
-ALLOWED_GEOGRAPHY_LEVELS = {"state", "county"}
+ALLOWED_GEOGRAPHY_LEVELS = {"state", "county", "block_group"}
 ALLOWED_TABLE_PATTERN = re.compile(r"^\d{4}_(CBG|METADATA_CBG|CBG_PATTERNS)", re.IGNORECASE)
 
 
@@ -106,7 +106,7 @@ class DynamicSemanticLayer:
         system = (
             "You propose a constrained Census analytics contract from live schema candidates. "
             "Return strict JSON only. Do not write SQL. Choose only a table and column from candidates. "
-            "Allowed operations: ranking, aggregate_metric, filter, comparison. Allowed geography levels: state, county. "
+            "Allowed operations: ranking, aggregate_metric, filter, comparison. Allowed geography levels: state, county, block_group. "
             "Allowed aggregations: sum, avg, approx_median, rate. Use sum for additive counts, avg for distances/rates/means, "
             "and approx_median only when the user asks for a median-like column. If unclear, set needs_clarification true."
         )
@@ -140,7 +140,8 @@ class DynamicSemanticLayer:
         if any(term in lowered for term in ["more than", "less than", "over", "under"]) and re.search(r"\d", lowered):
             operation = "filter"
         sort_direction = "ascending" if any(term in lowered for term in ["lowest", "least", "fewest", "smallest"]) else "descending"
-        geography_level = "county" if "county" in lowered or "counties" in lowered else "state"
+        geography_level = self._geography_level_from_question(lowered)
+        threshold_operator, threshold_value = self._threshold_from_question(lowered)
         return {
             "needs_clarification": False,
             "operation": operation,
@@ -159,8 +160,40 @@ class DynamicSemanticLayer:
             },
             "unit": "value",
             "sort_direction": sort_direction,
-            "limit": 5 if "top" in lowered else 1,
+            "limit": self._limit_from_question(lowered),
+            "threshold_operator": threshold_operator,
+            "threshold_value": threshold_value,
         }
+
+    def _geography_level_from_question(self, lowered: str) -> str:
+        if "block group" in lowered or "block groups" in lowered or "cbg" in lowered:
+            return "block_group"
+        if "county" in lowered or "counties" in lowered:
+            return "county"
+        return "state"
+
+    def _limit_from_question(self, lowered: str) -> int:
+        match = re.search(r"\btop\s+(\d+)\b", lowered)
+        if match:
+            return int(match.group(1))
+        if "block group" in lowered or "block groups" in lowered or "county" in lowered or "counties" in lowered:
+            return 100
+        return 5 if "top" in lowered else 1
+
+    def _threshold_from_question(self, lowered: str) -> tuple[str | None, float | None]:
+        match = re.search(r"\b(more than|over|above|greater than)\s+\$?([\d,.]+)\s*(million|m)?\b", lowered)
+        if match:
+            value = float(match.group(2).replace(",", ""))
+            if match.group(3):
+                value *= 1_000_000
+            return ">", value
+        match = re.search(r"\b(less than|under|below|fewer than)\s+\$?([\d,.]+)\s*(million|m)?\b", lowered)
+        if match:
+            value = float(match.group(2).replace(",", ""))
+            if match.group(3):
+                value *= 1_000_000
+            return "<", value
+        return None, None
 
     def _select_deterministic_candidates(self, lowered: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if "veteran" in lowered:
@@ -186,6 +219,8 @@ class DynamicSemanticLayer:
     def _repair_contract_from_metadata(self, question: str, contract: dict, candidates: list[dict[str, Any]]) -> dict:
         lowered = question.lower()
         if "veteran" not in lowered:
+            if self._is_rental_units_question(lowered):
+                return self._repair_rental_units_contract(question, contract, candidates)
             return contract
         veteran_rows = self._select_deterministic_candidates(lowered, candidates)
         if not veteran_rows:
@@ -216,7 +251,7 @@ class DynamicSemanticLayer:
             repaired["denominator_columns"] = denominator_columns
             repaired["unit"] = "%"
         if not repaired.get("geography_level"):
-            repaired["geography_level"] = "county" if "county" in lowered or "counties" in lowered else "state"
+            repaired["geography_level"] = self._geography_level_from_question(lowered)
         if not repaired.get("sort_direction"):
             repaired["sort_direction"] = "descending"
         if not repaired.get("limit"):
@@ -224,6 +259,67 @@ class DynamicSemanticLayer:
         if not wants_rate:
             repaired["unit"] = "people"
         return repaired
+
+    def _is_rental_units_question(self, lowered: str) -> bool:
+        return any(term in lowered for term in ["rental", "renter", "rent"]) and any(term in lowered for term in ["unit", "units", "housing"])
+
+    def _repair_rental_units_contract(self, question: str, contract: dict, candidates: list[dict[str, Any]]) -> dict:
+        lowered = question.lower()
+        rental_rows = self._find_rental_unit_rows(candidates)
+        if not rental_rows:
+            targeted_result = search_variable_metadata("tenure renter occupied housing units", year=2020, limit=80)
+            if not targeted_result.error:
+                rental_rows = self._find_rental_unit_rows([row for row in targeted_result.rows if self._candidate_is_eligible(row)])
+                if rental_rows:
+                    candidates.extend(row for row in rental_rows if row not in candidates)
+        if not rental_rows:
+            return contract
+        first = rental_rows[0]
+        column = _normal(first.get("COLUMN_NAME") or first.get("column_name"))
+        threshold_operator, threshold_value = self._threshold_from_question(lowered)
+        repaired = dict(contract)
+        repaired.update(
+            {
+                "operation": self._operation_from_question(lowered),
+                "table": _normal(first.get("TABLE_NAME") or first.get("table_name")),
+                "value_column": column,
+                "value_columns": [column],
+                "geography_column": "CENSUS_BLOCK_GROUP",
+                "geography_level": self._geography_level_from_question(lowered),
+                "aggregation": "sum",
+                "display_name": "Renter-occupied housing units",
+                "metric_definition": _normal(first.get("CONCEPT") or first.get("concept")),
+                "universe": _normal(first.get("UNIVERSE") or first.get("universe")),
+                "selected_variable_labels": {
+                    column.upper(): _normal(first.get("LABEL") or first.get("label")),
+                },
+                "unit": "housing units",
+                "sort_direction": "descending",
+                "limit": self._limit_from_question(lowered),
+                "threshold_operator": threshold_operator,
+                "threshold_value": threshold_value,
+            }
+        )
+        return repaired
+
+    def _find_rental_unit_rows(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rental_rows = [
+            row
+            for row in candidates
+            if _normal(row.get("CONCEPT") or row.get("concept")).lower() == "tenure"
+            and self._label_parts(row)
+            and self._label_parts(row)[-1].lower() == "renter occupied"
+            and "householder" not in " ".join(self._label_parts(row)).lower()
+        ]
+        if not rental_rows:
+            rental_rows = [
+                row
+                for row in candidates
+                if self._label_parts(row)
+                and self._label_parts(row)[-1].lower() == "renter occupied"
+                and _normal(row.get("UNIVERSE") or row.get("universe")).lower() == "occupied housing units"
+            ]
+        return rental_rows
 
     def _operation_from_question(self, lowered: str) -> str:
         if any(term in lowered for term in ["compare", "versus", " vs "]):
@@ -293,7 +389,7 @@ class DynamicSemanticLayer:
         if operation not in ALLOWED_OPERATIONS:
             return ValidationResult(False, "The dynamic operation is not supported.")
         if geography_level not in ALLOWED_GEOGRAPHY_LEVELS:
-            return ValidationResult(False, "The dynamic geography level must be state or county.")
+            return ValidationResult(False, "The dynamic geography level must be state, county, or block_group.")
         if aggregation == "rate":
             denominator_columns = [_normal(column).upper() for column in contract.get("denominator_columns", []) if _normal(column)]
             if not denominator_columns:
@@ -322,7 +418,7 @@ class DynamicSemanticLayer:
                 expected = contract["label_by_column"].get(selected_column) or contract["label_by_column"].get(selected_column.upper())
                 if expected and expected != label:
                     return ValidationResult(False, "The selected variable label does not match the metadata catalog.")
-        if operation in {"aggregate_metric", "comparison"} and not find_geographies(question):
+        if operation in {"aggregate_metric", "comparison"} and geography_level != "block_group" and not find_geographies(question):
             return ValidationResult(False, "A selected geography is required for a dynamic lookup.")
         return ValidationResult(True)
 
@@ -395,6 +491,6 @@ class DynamicSemanticLayer:
             },
         )
         if operation == "ranking":
-            plan.group_by = ["state_fips" if geography_level == "state" else "county_fips"]
+            plan.group_by = ["census_block_group" if geography_level == "block_group" else ("state_fips" if geography_level == "state" else "county_fips")]
             plan.order_by = [f"value {'ASC' if plan.sort_direction == 'ascending' else 'DESC'}"]
         return plan

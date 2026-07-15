@@ -13,7 +13,9 @@ STOPWORDS = {
     "are",
     "available",
     "between",
+    "block",
     "california",
+    "census",
     "columns",
     "compare",
     "compared",
@@ -24,6 +26,8 @@ STOPWORDS = {
     "field",
     "fields",
     "florida",
+    "group",
+    "groups",
     "have",
     "highest",
     "least",
@@ -31,6 +35,7 @@ STOPWORDS = {
     "kind",
     "metadata",
     "most",
+    "over",
     "people",
     "population",
     "percent",
@@ -51,6 +56,12 @@ STOPWORDS = {
     "you",
 }
 
+TERM_EXPANSIONS = {
+    "rental": ["renter", "rent"],
+    "rentals": ["renter", "rent"],
+    "renters": ["renter", "rent"],
+}
+
 
 def search_metric_catalog(text: str) -> MetricDefinition | None:
     return resolve_metric(text)
@@ -59,6 +70,8 @@ def search_metric_catalog(text: str) -> MetricDefinition | None:
 def schema_search_terms(text: str) -> list[str]:
     terms = []
     for token in re.findall(r"[a-zA-Z0-9_]+", text.lower()):
+        if token.isdigit():
+            continue
         if token in STOPWORDS:
             continue
         normalized = token
@@ -70,6 +83,9 @@ def schema_search_terms(text: str) -> list[str]:
             terms.append(token)
         if normalized != token and normalized not in terms:
             terms.append(normalized)
+        for expanded in TERM_EXPANSIONS.get(normalized, []):
+            if expanded not in terms:
+                terms.append(expanded)
     return terms[:8]
 
 

@@ -168,8 +168,12 @@ ORDER BY avg_distance_from_home_meters DESC
         if plan.query_type == "ranking":
             direction = "ASC" if plan.sort_direction == "ascending" else "DESC"
             limit_clause = f"LIMIT 1 OFFSET {plan.result_rank - 1}" if plan.result_rank else f"LIMIT {plan.row_limit or 10}"
-            group_expr = f"LEFT({geo_col}, 5)" if plan.geography_level == "county" else f"LEFT({geo_col}, 2)"
-            id_alias = "county_fips" if plan.geography_level == "county" else "state_fips"
+            if plan.geography_level == "block_group":
+                group_expr = geo_col
+                id_alias = "census_block_group"
+            else:
+                group_expr = f"LEFT({geo_col}, 5)" if plan.geography_level == "county" else f"LEFT({geo_col}, 2)"
+                id_alias = "county_fips" if plan.geography_level == "county" else "state_fips"
             where_conditions = []
             parameters = {}
             if plan.geography_filters:
@@ -194,8 +198,12 @@ ORDER BY value {direction}
 
         if plan.query_type == "filter":
             operator = plan.threshold_operator or ">"
-            group_expr = f"LEFT({geo_col}, 5)" if plan.geography_level == "county" else f"LEFT({geo_col}, 2)"
-            id_alias = "county_fips" if plan.geography_level == "county" else "state_fips"
+            if plan.geography_level == "block_group":
+                group_expr = geo_col
+                id_alias = "census_block_group"
+            else:
+                group_expr = f"LEFT({geo_col}, 5)" if plan.geography_level == "county" else f"LEFT({geo_col}, 2)"
+                id_alias = "county_fips" if plan.geography_level == "county" else "state_fips"
             where_conditions = []
             parameters = {"threshold_value": plan.threshold_value}
             if plan.geography_level == "county" and plan.geography_filters:

@@ -134,6 +134,9 @@ class CensusChatAgent:
         plan = self.sql_generator.generate(plan)
         sql_validation = self.sql_validator.validate(plan)
         if not sql_validation.is_valid:
+            dynamic_response = self._try_dynamic_semantic_plan(resolved_question)
+            if dynamic_response:
+                return dynamic_response
             return AgentResponse(
                 answer="I could not construct a safe verified query for that question, so I am not returning an unverified answer.",
                 status="invalid_sql",

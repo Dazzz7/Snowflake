@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.catalog.catalog_search import rank_schema_rows, schema_search_terms
 from app.config import settings
 from app.database.query_executor import SnowflakeQueryExecutor
@@ -146,7 +148,7 @@ JOIN {settings.snowflake_database}.INFORMATION_SCHEMA.COLUMNS columns
  AND UPPER(columns.column_name) = UPPER(descriptions.table_id)
 WHERE ({' OR '.join(predicates)})
 ORDER BY descriptions.data_table_name, descriptions.table_id
-LIMIT {max(1, min(limit * 4, 240))}
+LIMIT {max(1, min(limit * 80, 5000))}
 """.strip()
     result = SnowflakeQueryExecutor().execute(sql, parameters)
     if result.error:
@@ -169,10 +171,16 @@ def _rank_variable_rows(text: str, rows: list[dict], limit: int) -> list[dict]:
         universe = str(row.get("UNIVERSE") or row.get("universe") or "")
         category = str(row.get("CATEGORY") or row.get("category") or "")
         haystack = " ".join([label, concept, universe, category, str(row.get("COLUMN_NAME") or "")]).lower()
-        score = sum(6 for term in terms if term in label.lower())
-        score += sum(4 for term in terms if term in concept.lower() or term in category.lower())
-        score += sum(2 for term in terms if term in universe.lower())
-        score += sum(1 for term in terms if term in haystack)
+        label_tokens = _metadata_tokens(label)
+        concept_tokens = _metadata_tokens(concept)
+        universe_tokens = _metadata_tokens(universe)
+        category_tokens = _metadata_tokens(category)
+        haystack_tokens = _metadata_tokens(haystack)
+        score = sum(8 for term in terms if term in label_tokens)
+        score += sum(5 for term in terms if term in concept_tokens or term in category_tokens)
+        score += sum(3 for term in terms if term in universe_tokens)
+        score += sum(1 for term in terms if term in haystack_tokens)
+        score += sum(4 for term in terms if f" {term} " in f" {haystack} ")
         if str(row.get("IS_MARGIN_OF_ERROR")).lower() == "true":
             score -= 20
         if score > 0:
@@ -180,3 +188,7 @@ def _rank_variable_rows(text: str, rows: list[dict], limit: int) -> list[dict]:
             enriched["SCORE"] = score
             scored.append((score, enriched))
     return [row for _, row in sorted(scored, key=lambda item: item[0], reverse=True)[:limit]]
+
+
+def _metadata_tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))

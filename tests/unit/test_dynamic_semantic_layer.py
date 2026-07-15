@@ -158,3 +158,43 @@ def test_dynamic_comparison_plan_uses_selected_geographies(monkeypatch):
     assert plan is not None
     assert plan.query_type == "comparison"
     assert {item["name"] for item in plan.geography_filters} == {"Texas", "California"}
+
+
+def test_rental_units_question_uses_direct_tenure_variable(monkeypatch):
+    rows = [
+        {
+            "TABLE_NAME": "2020_CBG_B25",
+            "COLUMN_NAME": "B25008e3",
+            "DATA_TYPE": "FLOAT",
+            "TABLE_NUMBER": "B25008",
+            "CONCEPT": "Total Population In Occupied Housing Units By Tenure",
+            "LABEL": "Estimate: Total population in occupied housing units: Total: Renter occupied",
+            "UNIVERSE": "Total population in occupied housing units",
+            "IS_ESTIMATE": True,
+            "IS_MARGIN_OF_ERROR": False,
+        },
+        {
+            "TABLE_NAME": "2020_CBG_B25",
+            "COLUMN_NAME": "B25003e3",
+            "DATA_TYPE": "FLOAT",
+            "TABLE_NUMBER": "B25003",
+            "CONCEPT": "Tenure",
+            "LABEL": "Estimate: TENURE: Occupied housing units: Total: Renter occupied",
+            "UNIVERSE": "Occupied housing units",
+            "IS_ESTIMATE": True,
+            "IS_MARGIN_OF_ERROR": False,
+        },
+    ]
+    monkeypatch.setattr("app.agent.dynamic_semantic_layer.search_variable_metadata", lambda question, year=2020, limit=60: fake_schema_result(rows))
+
+    plan, validation, diagnostics = DynamicSemanticLayer(llm=None).create_plan("Which Census Block Groups have over 100 rental units?")
+
+    assert validation.is_valid
+    assert plan is not None
+    assert plan.query_type == "filter"
+    assert plan.geography_level == "block_group"
+    assert plan.threshold_operator == ">"
+    assert plan.threshold_value == 100
+    assert plan.metric.display_name == "Renter-occupied housing units"
+    assert plan.metric.estimate_columns == ["B25003e3"]
+    assert diagnostics["validated_contract"]["selected_variable_labels"]["B25003E3"].endswith("Renter occupied")

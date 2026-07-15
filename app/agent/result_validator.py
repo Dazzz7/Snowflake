@@ -52,7 +52,11 @@ class ResultValidator:
             if isinstance(value, (int, float)) and value < 0:
                 return ValidationResult(False, "The query returned an implausible negative value.")
             if plan.query_type == "ranking":
-                if plan.geography_level == "county":
+                if plan.geography_level == "block_group":
+                    cbg = row.get("CENSUS_BLOCK_GROUP") or row.get("census_block_group")
+                    if not cbg:
+                        return ValidationResult(False, "The block-group ranking result did not include a Census Block Group identifier.")
+                elif plan.geography_level == "county":
                     county_fips = row.get("COUNTY_FIPS") or row.get("county_fips")
                     if not county_fips:
                         return ValidationResult(False, "The county ranking result did not include a county identifier.")
@@ -70,6 +74,10 @@ class ResultValidator:
                 county_fips = row.get("COUNTY_FIPS") or row.get("county_fips")
                 if not county_fips:
                     return ValidationResult(False, "The county filter result did not include a county identifier.")
+            if plan.query_type == "filter" and plan.geography_level == "block_group":
+                cbg = row.get("CENSUS_BLOCK_GROUP") or row.get("census_block_group")
+                if not cbg:
+                    return ValidationResult(False, "The block-group filter result did not include a Census Block Group identifier.")
             is_percentage = plan.metric.unit == "%" or (plan.metric.metric_id == "population_by_age" and plan.value_kind == "percentage")
             if is_percentage and isinstance(value, (int, float)) and not (0 <= value <= 100):
                 return ValidationResult(False, "The percentage result failed a 0 to 100 sanity check.")
