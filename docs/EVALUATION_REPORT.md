@@ -14,7 +14,7 @@ Top strengths:
 3. Live Snowflake integration passed the requested question set. Evidence: `pytest` output: `22 passed`, including `tests/golden/test_requested_question_set.py::test_requested_question_set_answers_from_snowflake`.
 
 Critical weaknesses:
-1. No public URL is present or verified. `docs/deployment.md:9-11` describes how to deploy, but no live deployment evidence exists.
+1. Public URL is now present and HTTP/health checks pass, but full browser interaction and Gemini success still need verification. Live app: `https://us-census-data-assistant.onrender.com`.
 2. Gemini is configured in deployment files but not yet verified through a public deployment. Evidence: `render.yaml` sets `USE_LLM=true`, `LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`, and `LLM_MODEL=gemini-3.5-flash`; `LLM_API_KEY` is a required secret.
 3. The dataset/metadata coverage is curated, not complete schema-aware reasoning. Evidence: `metadata/verified_metrics.json` is a manually maintained registry; `app/catalog/metric_registry.py:17-23` loads local JSON.
 

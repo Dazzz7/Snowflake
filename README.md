@@ -2,6 +2,8 @@
 
 Interactive chat agent for answering natural-language questions grounded in the Snowflake Marketplace US Open Census dataset.
 
+Live app: https://us-census-data-assistant.onrender.com
+
 The central design choice is that Gemini is used for language understanding, while metric definitions, geography mappings, SQL templates, permissions, and validation rules are controlled deterministically by the application.
 
 ## Architecture

@@ -1,5 +1,7 @@
 # Public Deployment
 
+Live app: https://us-census-data-assistant.onrender.com
+
 The app has no demo-data mode and no local-model dependency. Public deployments must be configured with Snowflake credentials and a Gemini API key. Gemini is used through Google's OpenAI-compatible Gemini API endpoint.
 
 ## Render
