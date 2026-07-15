@@ -50,6 +50,9 @@ for message in st.session_state.messages:
         if message.get("interpretation"):
             with st.expander("How I interpreted this"):
                 st.json(message["interpretation"])
+        if message.get("evidence"):
+            with st.expander("Evidence"):
+                st.json(message["evidence"])
         if message.get("sql"):
             with st.expander("SQL"):
                 st.code(message["sql"], language="sql")
@@ -70,6 +73,9 @@ if question:
         if response.interpretation:
             with st.expander("How I interpreted this"):
                 st.json(response.interpretation)
+        if response.evidence:
+            with st.expander("Evidence"):
+                st.json(response.evidence)
         if response.sql:
             with st.expander("SQL"):
                 st.code(response.sql, language="sql")
@@ -79,6 +85,7 @@ if question:
             "role": "assistant",
             "content": response.answer,
             "interpretation": response.interpretation,
+            "evidence": response.evidence,
             "sql": response.sql,
         }
     )

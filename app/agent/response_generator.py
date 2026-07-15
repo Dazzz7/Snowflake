@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.agent.evidence_renderer import build_evidence
 from app.catalog.age_bands import age_range_label, columns_for_age_range
 from app.catalog.geography import load_counties, load_states
 from app.models.query_models import QueryPlan
@@ -201,6 +202,7 @@ class ResponseGenerator:
         return AgentResponse(
             answer=answer,
             interpretation=interpretation,
+            evidence=build_evidence(plan, result),
             sql=plan.sql,
             rows=rows,
         )

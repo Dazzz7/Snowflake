@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.catalog.geography import load_states
 from app.models.query_models import QueryPlan, ValidationResult
 from app.models.response_models import QueryResult
 
@@ -10,6 +11,7 @@ class ResultValidator:
             return ValidationResult(False, result.error)
         if not result.rows:
             return ValidationResult(False, "The query returned no rows.")
+        state_fips_values = {meta["state_fips"] for meta in load_states().values()}
         if plan.query_type == "age_breakdown":
             if not any(key.lower().startswith("age_") or key.lower() == "under_5" for key in result.rows[0]):
                 return ValidationResult(False, "The age breakdown query did not return age-band columns.")
@@ -24,6 +26,25 @@ class ResultValidator:
                 return ValidationResult(False, "The dataset did not contain a usable value for that selection.")
             if isinstance(value, (int, float)) and value < 0:
                 return ValidationResult(False, "The query returned an implausible negative value.")
+            if plan.query_type == "ranking":
+                state_fips = row.get("STATE_FIPS") or row.get("state_fips")
+                if not state_fips:
+                    return ValidationResult(False, "The ranking result did not include a state identifier.")
+                if str(state_fips) not in state_fips_values:
+                    return ValidationResult(False, "The ranking result included a geography outside the approved state scope.")
+            if plan.query_type == "filter" and plan.geography_level == "state":
+                state_fips = row.get("STATE_FIPS") or row.get("state_fips")
+                if not state_fips or str(state_fips) not in state_fips_values:
+                    return ValidationResult(False, "The filter result included a geography outside the approved state scope.")
+            if plan.query_type == "filter" and plan.geography_level == "county":
+                county_fips = row.get("COUNTY_FIPS") or row.get("county_fips")
+                if not county_fips:
+                    return ValidationResult(False, "The county filter result did not include a county identifier.")
+            is_percentage = plan.metric.unit == "%" or (plan.metric.metric_id == "population_by_age" and plan.value_kind == "percentage")
+            if is_percentage and isinstance(value, (int, float)) and not (0 <= value <= 100):
+                return ValidationResult(False, "The percentage result failed a 0 to 100 sanity check.")
+            if plan.metric.unit == "USD" and isinstance(value, (int, float)) and value >= 1_000_000:
+                return ValidationResult(False, "The income result failed a broad sanity check.")
             if plan.metric.metric_id == "total_population" and plan.query_type == "aggregate_metric":
                 if isinstance(value, (int, float)) and not (1_000 <= value <= 100_000_000):
                     return ValidationResult(False, "The population result failed a broad sanity check.")

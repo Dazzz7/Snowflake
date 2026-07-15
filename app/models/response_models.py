@@ -8,6 +8,7 @@ class QueryResult:
     rows: list[dict] = field(default_factory=list)
     columns: list[str] = field(default_factory=list)
     query_duration_ms: int | None = None
+    query_id: str | None = None
     error: str | None = None
 
     @property
@@ -19,7 +20,7 @@ class QueryResult:
 class AgentResponse:
     answer: str
     interpretation: dict = field(default_factory=dict)
+    evidence: dict = field(default_factory=dict)
     sql: str | None = None
     status: str = "success"
     rows: list[dict] = field(default_factory=list)
-
