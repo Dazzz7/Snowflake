@@ -55,15 +55,17 @@ class DynamicSemanticLayer:
         self.llm = llm if llm is not None else (HostedLLMClient() if settings.has_hosted_llm_config else None)
 
     def create_plan(self, question: str) -> tuple[QueryPlan | None, ValidationResult, dict]:
-        average_age_plan = self._average_age_plan(question)
+        average_age_plan, average_age_diagnostics = self._average_age_plan(question)
         if average_age_plan:
             return average_age_plan, ValidationResult(True), {
                 "discovery_source": "derived_age_distribution",
+                **average_age_diagnostics,
                 "validated_contract": {
                     "operation": average_age_plan.query_type,
                     "metric_definition": average_age_plan.metric.description,
                     "source_columns": average_age_plan.metric.source_columns,
                     "calculation": average_age_plan.metric.calculation,
+                    "llm_contract": average_age_diagnostics.get("llm_contract"),
                 },
             }
         schema_result = search_variable_metadata(question, year=2020, limit=60)
@@ -84,9 +86,14 @@ class DynamicSemanticLayer:
         if not candidates:
             return None, ValidationResult(False, "No eligible numeric Census Block Group columns were found in live metadata."), diagnostics
 
+        llm_attempted = bool(self.llm)
         contract = self._contract_from_llm(question, candidates) if self.llm else None
+        llm_succeeded = bool(contract)
         if not contract:
             contract = self._contract_deterministically(question, candidates)
+        contract["_llm_attempted"] = llm_attempted
+        contract["_llm_succeeded"] = llm_succeeded
+        contract["_llm_provider"] = settings.llm_model if llm_attempted else None
         contract = self._repair_contract_from_metadata(question, contract, candidates)
         diagnostics["contract"] = contract
 
@@ -98,21 +105,28 @@ class DynamicSemanticLayer:
         diagnostics["validated_contract"] = contract
         return plan, ValidationResult(True), diagnostics
 
-    def _average_age_plan(self, question: str) -> QueryPlan | None:
+    def _average_age_plan(self, question: str) -> tuple[QueryPlan | None, dict]:
         lowered = question.lower()
         if not re.search(r"\b(average|mean)\b", lowered) or not re.search(r"\bage\b", lowered):
-            return None
+            return None, {}
+        llm_contract = self._derived_metric_contract_from_llm(question, "average_age") if self.llm else None
+        llm_attempted = bool(self.llm)
+        llm_succeeded = bool(llm_contract)
         geography_level = self._geography_level_from_question(lowered)
         geographies = find_geographies(question)
         operation = "aggregate_metric"
-        if any(term in lowered for term in ["highest", "lowest", "top", "rank", "most", "least", "fewest"]):
+        if llm_contract and llm_contract.get("operation") in ALLOWED_OPERATIONS:
+            operation = _normal(llm_contract.get("operation"))
+        elif any(term in lowered for term in ["highest", "lowest", "top", "rank", "most", "least", "fewest"]):
             operation = "ranking"
         elif re.search(r"\b(per|by|for each)\s+state\b", lowered) or re.search(r"\b(per|by|for each)\s+county\b", lowered):
             operation = "grouped_metric"
         elif not geographies and geography_level in {"state", "county"}:
             operation = "grouped_metric"
+        if llm_contract and llm_contract.get("geography_level") in ALLOWED_GEOGRAPHY_LEVELS:
+            geography_level = _normal(llm_contract.get("geography_level"))
         if operation == "aggregate_metric" and not geographies:
-            return None
+            return None, {"llm_attempted": llm_attempted, "llm_succeeded": llm_succeeded, "llm_contract": llm_contract}
 
         source_columns = [column for band in AGE_BANDS for column in band.columns]
         metric = MetricDefinition(
@@ -146,8 +160,10 @@ class DynamicSemanticLayer:
             for geo in geographies
             if (geo.type == "state" and geo.fips_code) or (geo.type == "city" and geo.county_fips)
         ]
-        sort_direction = "ascending" if any(term in lowered for term in ["lowest", "least", "fewest", "youngest"]) else "descending"
+        sort_direction = _normal(llm_contract.get("sort_direction")) if llm_contract and llm_contract.get("sort_direction") in {"ascending", "descending"} else "ascending" if any(term in lowered for term in ["lowest", "least", "fewest", "youngest"]) else "descending"
         row_limit = self._limit_from_question(lowered)
+        if llm_contract and isinstance(llm_contract.get("limit"), int):
+            row_limit = max(1, min(int(llm_contract["limit"]), 100))
         if operation == "grouped_metric":
             row_limit = 100
         plan = QueryPlan(
@@ -161,11 +177,33 @@ class DynamicSemanticLayer:
             row_limit=row_limit,
             interpretation=f"Approximate average age by {geography_level.replace('_', ' ')} from ACS age bands.",
             analysis_params={"derived_metric": "weighted_age_band_midpoint_average"},
+            llm_attempted=llm_attempted,
+            llm_succeeded=llm_succeeded,
+            llm_provider=settings.llm_model if llm_attempted else None,
         )
         if operation in {"ranking", "grouped_metric"}:
             plan.group_by = ["state_fips" if geography_level == "state" else "county_fips"]
             plan.order_by = [f"value {'ASC' if sort_direction == 'ascending' else 'DESC'}"]
-        return plan
+        return plan, {"llm_attempted": llm_attempted, "llm_succeeded": llm_succeeded, "llm_contract": llm_contract}
+
+    def _derived_metric_contract_from_llm(self, question: str, metric_kind: str) -> dict | None:
+        if not self.llm:
+            return None
+        system = (
+            "You are planning a Census analytics query. Return strict JSON only. "
+            "Do not write SQL and do not invent data values. Choose the analytical operation, geography level, sort direction, and limit. "
+            "Allowed operations: aggregate_metric, grouped_metric, ranking. Allowed geography levels: state, county, block_group. "
+            "Use grouped_metric when the user asks for a metric per/by/for each geography."
+        )
+        payload = self.llm.generate_json(
+            system,
+            (
+                f"Question: {question}\n"
+                f"Derived metric available: {metric_kind}. It is computed by the application from verified ACS age-band variables.\n"
+                "Return keys: operation, geography_level, sort_direction, limit, reasoning."
+            ),
+        )
+        return payload if isinstance(payload, dict) else None
 
     def _candidate_is_eligible(self, row: dict[str, Any]) -> bool:
         table = _normal(row.get("TABLE_NAME") or row.get("table_name"))
@@ -570,6 +608,9 @@ class DynamicSemanticLayer:
                 "dynamic_contract": contract,
                 "semantic_layer": "live_schema_metadata",
             },
+            llm_attempted=bool(contract.get("_llm_attempted")),
+            llm_succeeded=bool(contract.get("_llm_succeeded")),
+            llm_provider=contract.get("_llm_provider"),
         )
         if operation == "ranking":
             plan.group_by = ["census_block_group" if geography_level == "block_group" else ("state_fips" if geography_level == "state" else "county_fips")]

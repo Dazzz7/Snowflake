@@ -8,6 +8,17 @@ def fake_schema_result(rows):
     return QueryResult(rows=rows, columns=["TABLE_NAME", "COLUMN_NAME", "DATA_TYPE", "COMMENT"], query_id="schema-1")
 
 
+class FakePlanningLLM:
+    def generate_json(self, system, user):
+        return {
+            "operation": "grouped_metric",
+            "geography_level": "state",
+            "sort_direction": "descending",
+            "limit": 100,
+            "reasoning": "The user asked for average age per state.",
+        }
+
+
 def test_dynamic_semantic_layer_builds_validated_ranking_plan(monkeypatch):
     rows = [
         {"TABLE_NAME": "2019_CBG_PATTERNS", "COLUMN_NAME": "RAW_VISIT_COUNT", "DATA_TYPE": "NUMBER", "COMMENT": None},
@@ -211,3 +222,14 @@ def test_average_age_per_state_builds_grouped_derived_metric():
     assert plan.metric.calculation == "weighted_average_age"
     assert "B01001e3" in plan.metric.source_columns
     assert diagnostics["validated_contract"]["operation"] == "grouped_metric"
+
+
+def test_average_age_per_state_attempts_llm_when_available():
+    plan, validation, diagnostics = DynamicSemanticLayer(llm=FakePlanningLLM()).create_plan("average age of residents per state in usa")
+
+    assert validation.is_valid
+    assert plan is not None
+    assert plan.llm_attempted is True
+    assert plan.llm_succeeded is True
+    assert diagnostics["llm_contract"]["operation"] == "grouped_metric"
+    assert diagnostics["validated_contract"]["llm_contract"]["geography_level"] == "state"
