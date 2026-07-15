@@ -10,11 +10,9 @@ from app.database.schema_loader import search_variable_metadata
 from app.models.response_models import QueryResult
 
 
-ALLOWED_DATA_TABLES = {
-    "2020_CBG_B01": {"category": "population age sex", "description": "ACS 2020 sex-by-age and total population estimates"},
-    "2020_CBG_B02": {"category": "race", "description": "ACS 2020 race estimates"},
-    "2020_METADATA_CBG_GEOGRAPHIC_DATA": {"category": "land geography", "description": "Census Block Group geography and land/water area"},
-}
+GEOGRAPHY_TABLE = "2020_METADATA_CBG_GEOGRAPHIC_DATA"
+
+TABLE_NAME_PATTERN = re.compile(r"^2020_CBG_[A-Z0-9]{3}$", re.IGNORECASE)
 
 GEOGRAPHY_COLUMNS = {
     "CENSUS_BLOCK_GROUP": "Census Block Group identifier",
@@ -25,15 +23,14 @@ GEOGRAPHY_COLUMNS = {
 }
 
 
-def search_metadata(query: str, top_k: int = 20) -> dict[str, Any]:
-    top_k = max(1, min(top_k, 25))
+def search_metadata(query: str, top_k: int = 40) -> dict[str, Any]:
+    top_k = max(1, min(top_k, 80))
     rows: list[dict[str, Any]] = []
-    result = search_variable_metadata(query, year=2020, limit=120)
+    result = search_variable_metadata(query, year=2020, limit=max(top_k, 60))
     if not result.error:
         for row in result.rows:
             table = str(row.get("TABLE_NAME") or row.get("table_name") or "").upper()
-            column = str(row.get("COLUMN_NAME") or row.get("column_name") or "")
-            if table not in {"2020_CBG_B01", "2020_CBG_B02"}:
+            if not _is_census_data_table(table):
                 continue
             if str(row.get("IS_MARGIN_OF_ERROR")).lower() == "true":
                 continue
@@ -56,17 +53,17 @@ def search_metadata(query: str, top_k: int = 20) -> dict[str, Any]:
                         "geography_column": "CENSUS_BLOCK_GROUP",
                     }
                 )
-    return {"results": rows[:top_k], "error": result.error}
+    return {"results": _dedupe_metadata_rows(rows)[:top_k], "error": result.error}
 
 
 def describe_table(table_name: str) -> dict[str, Any]:
     table = table_name.upper()
-    if table not in ALLOWED_DATA_TABLES:
-        return {"error": "Table is outside the narrowed Census scope.", "table_name": table_name}
-    if table == "2020_METADATA_CBG_GEOGRAPHIC_DATA":
+    if not _is_allowed_table_name(table):
+        return {"error": "Table is outside the retrieved Census metadata scope.", "table_name": table_name}
+    if table == GEOGRAPHY_TABLE:
         return {
             "table_name": table,
-            "description": ALLOWED_DATA_TABLES[table]["description"],
+            "description": "Census Block Group geography and land/water area",
             "geography_grain": "Census Block Group",
             "geography_column": "CENSUS_BLOCK_GROUP",
             "columns": [
@@ -136,7 +133,7 @@ LIMIT 250
         )
     return {
         "table_name": table,
-        "description": ALLOWED_DATA_TABLES[table]["description"],
+        "description": "ACS 2020 Census Block Group estimate table discovered from Snowflake metadata",
         "geography_grain": "Census Block Group",
         "geography_column": "CENSUS_BLOCK_GROUP",
         "columns": columns,
@@ -146,8 +143,8 @@ LIMIT 250
 
 def inspect_sample_rows(table_name: str, columns: list[str], limit: int = 5) -> dict[str, Any]:
     table = table_name.upper()
-    if table not in ALLOWED_DATA_TABLES:
-        return {"error": "Table is outside the narrowed Census scope."}
+    if not _is_allowed_table_name(table):
+        return {"error": "Table is outside the retrieved Census metadata scope."}
     allowed_columns = {column["column_name"].upper() for column in describe_table(table).get("columns", [])}
     requested = [column for column in columns if column.upper() in allowed_columns][:12]
     if not requested:
@@ -215,3 +212,23 @@ def _column_matches_query(column: str, label: str, query: str) -> bool:
     words = set(re.findall(r"[a-z0-9]+", query.lower()))
     haystack = f"{column} {label}".lower()
     return any(word in haystack for word in words)
+
+
+def _is_census_data_table(table: str) -> bool:
+    return bool(TABLE_NAME_PATTERN.match(table))
+
+
+def _is_allowed_table_name(table: str) -> bool:
+    return table == GEOGRAPHY_TABLE or _is_census_data_table(table)
+
+
+def _dedupe_metadata_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    deduped = []
+    for row in rows:
+        key = (str(row.get("table_name") or "").upper(), str(row.get("column_name") or "").upper())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped

@@ -222,7 +222,7 @@ st.markdown(
             <div class="snow-mark">SF</div>
             <div>
                 <h1 class="snow-title">{settings.app_name}</h1>
-                <p class="snow-subtitle">Snowflake-backed Census analytics for population, age, sex, race, and geography.</p>
+                <p class="snow-subtitle">Snowflake-backed Census analytics powered by targeted metadata retrieval.</p>
             </div>
         </div>
         <div class="status-grid">
@@ -236,7 +236,7 @@ st.markdown(
             </div>
             <div class="status-pill">
                 <div class="status-label">Scope</div>
-                <div class="status-value">Census B01, B02, land/geography</div>
+                <div class="status-value">Question-specific Census metadata</div>
             </div>
         </div>
     </section>
@@ -254,7 +254,7 @@ with st.sidebar:
         </div>
         <div class="sidebar-card">
             <strong>Data Boundary</strong><br>
-            Population, age, sex, race, land, and Census geography only.
+            The agent searches relevant Snowflake Census metadata for each question instead of sending the full schema.
         </div>
         """,
         unsafe_allow_html=True,
@@ -271,11 +271,11 @@ with st.sidebar:
     examples = [
         "What is the US population?",
         "What is the population of California?",
-        "Which state has the highest population?",
+        "Which Census Block Groups have over 100 rental units?",
         "How many people are over 65 in the US?",
         "Are there more males or females in Texas?",
         "What is the racial distribution of Georgia?",
-        "Which state has the largest land area?",
+        "Which state has the highest median household income?",
     ]
     for example in examples:
         if st.button(example, use_container_width=True):
@@ -294,7 +294,7 @@ for message in st.session_state.messages:
             with st.expander("SQL"):
                 st.code(message["sql"], language="sql")
 
-question = st.chat_input("Ask about US Census population, age, sex, race, land, or geography")
+question = st.chat_input("Ask about the available US Census data in Snowflake")
 if not question and st.session_state.get("pending_question"):
     question = st.session_state.pop("pending_question")
 

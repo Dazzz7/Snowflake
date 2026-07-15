@@ -181,6 +181,7 @@ def _rank_variable_rows(text: str, rows: list[dict], limit: int) -> list[dict]:
         score += sum(3 for term in terms if term in universe_tokens)
         score += sum(1 for term in terms if term in haystack_tokens)
         score += sum(4 for term in terms if f" {term} " in f" {haystack} ")
+        score += _semantic_metadata_bonus(text, label, concept, universe, category)
         if str(row.get("IS_MARGIN_OF_ERROR")).lower() == "true":
             score -= 20
         if score > 0:
@@ -192,3 +193,35 @@ def _rank_variable_rows(text: str, rows: list[dict], limit: int) -> list[dict]:
 
 def _metadata_tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _semantic_metadata_bonus(query: str, label: str, concept: str, universe: str, category: str) -> int:
+    query_lower = query.lower()
+    label_lower = label.lower()
+    combined = " ".join([label, concept, universe, category]).lower()
+    bonus = 0
+
+    asks_for_units = any(term in query_lower for term in ["unit", "units", "housing"])
+    asks_for_renters = any(term in query_lower for term in ["rental", "rentals", "renter", "renters"])
+    asks_for_count = asks_for_units and not any(term in query_lower for term in ["median", "average", "aggregate", "dollar", "cost", "gross rent"])
+
+    if asks_for_renters and "renter occupied" in combined:
+        bonus += 18
+    if asks_for_renters and "tenure" in combined:
+        bonus += 16
+    if asks_for_renters and label_lower.startswith("estimate: tenure:"):
+        bonus += 30
+    if asks_for_renters and "estimate: tenure (" in label_lower:
+        bonus -= 10
+    if asks_for_renters and "tenure by" in label_lower:
+        bonus -= 6
+    if asks_for_units and "housing units" in combined:
+        bonus += 10
+    if asks_for_count and "total: renter occupied" in label_lower:
+        bonus += 14
+    if asks_for_count and any(term in label_lower for term in ["median", "average", "aggregate", "dollars", "gross rent"]):
+        bonus -= 24
+    if asks_for_units and "total population" in label_lower:
+        bonus -= 16
+
+    return bonus

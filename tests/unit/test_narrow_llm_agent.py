@@ -28,7 +28,7 @@ def test_narrow_agent_rejects_out_of_scope_from_llm():
             {
                 "in_scope": False,
                 "resolved_question": "What is the median income in Texas?",
-                "reason": "Income is outside the supported scope.",
+                "reason": "The question is outside the available Census metadata.",
             }
         ]
     )
@@ -36,7 +36,7 @@ def test_narrow_agent_rejects_out_of_scope_from_llm():
     response = NarrowLLMCensusAgent(llm=llm).answer("What is the median income in Texas?", "scope-test")
 
     assert response.status == "out_of_scope"
-    assert "population, age, sex, race" in response.answer
+    assert "Snowflake US Census dataset" in response.answer
     assert response.interpretation["scope_decision"]["in_scope"] is False
 
 

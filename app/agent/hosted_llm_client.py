@@ -26,7 +26,7 @@ class HostedLLMClient:
         self.timeout_seconds = timeout_seconds or settings.llm_timeout_seconds
         self.last_error: str | None = None
 
-    def _chat(self, messages: list[dict[str, str]], temperature: float = 0.0) -> str | None:
+    def _chat(self, messages: list[dict[str, str]], temperature: float = 0.0, max_tokens: int = 900) -> str | None:
         self.last_error = None
         if not self.base_url or not self.model:
             self.last_error = "LLM base URL or model is not configured."
@@ -35,6 +35,7 @@ class HostedLLMClient:
             "model": self.model,
             "messages": messages,
             "temperature": temperature,
+            "max_tokens": max_tokens,
         }
         data = json.dumps(payload).encode("utf-8")
         headers = {
@@ -80,12 +81,22 @@ class HostedLLMClient:
         return None
 
     def generate_json(self, system: str, user: str) -> dict[str, Any] | None:
-        content = self._chat(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        for attempt in range(2):
+            content = self._chat(messages, max_tokens=900)
+            parsed = self._parse_json_content(content)
+            if parsed is not None:
+                return parsed
+            messages = [
+                {"role": "system", "content": "Return one valid JSON object only. No markdown, no prose."},
+                {"role": "user", "content": f"Convert this response into valid JSON only:\n{content or ''}"},
             ]
-        )
+        return None
+
+    def _parse_json_content(self, content: str | None) -> dict[str, Any] | None:
         if not content:
             return None
         match = re.search(r"\{.*\}", content, re.DOTALL)
@@ -103,4 +114,5 @@ class HostedLLMClient:
                 {"role": "user", "content": user},
             ],
             temperature=0.2,
+            max_tokens=700,
         )

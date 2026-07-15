@@ -4,23 +4,23 @@ Interactive chat agent for answering natural-language questions grounded in the 
 
 Live app: https://us-census-data-assistant.onrender.com
 
-The central design choice is that Groq-hosted GPT-OSS is used for language understanding, while metric definitions, geography mappings, SQL templates, permissions, and validation rules are controlled deterministically by the application.
+The central design choice is that Groq-hosted GPT-OSS is used for scope detection, metadata selection, SQL planning, and answer generation, while the application constrains the model to approved Census tables, validates SQL, executes only against Snowflake, and exposes the evidence back to the user.
 
 ## Architecture
 
 Request flow:
 
-1. Conversation context resolver expands follow-ups like "What about Texas?" or "What about NYC?"
-2. Geography/entity resolver recognizes states plus verified city/county-set aliases such as NYC.
-3. Input scope guardrail rejects off-topic requests after context resolution.
-4. Intent parser extracts metric, geography level, selected entities, operation, limit, rank, thresholds, and breakdown dimension, and records whether the hosted LLM parser was attempted.
-5. Semantic catalog maps user language to verified direct, composite, derived-rate, median, and distribution metrics.
-6. Query planner builds a small, explicit plan.
-7. SQL templates generate read-only Snowflake SQL.
-8. SQL validator checks database, table, column, statement, and operation safety.
-9. Snowflake executor runs the query with a timeout and query tag.
-10. Result validator catches empty, null, negative, and implausible results.
-11. Response generator returns a grounded answer plus interpretation and SQL.
+1. Streamlit receives the user's natural-language Census question.
+2. The agent loads session context for short follow-ups.
+3. The LLM decides whether the question is plausibly related to the available Snowflake Census dataset.
+4. The LLM requests relevant metadata and candidate tables.
+5. The app retrieves metadata from Snowflake and compactly describes approved tables.
+6. The app resolves geography such as California or Texas to verified FIPS filters.
+7. The LLM generates one read-only Snowflake SQL query.
+8. The app normalizes Snowflake identifiers, validates the SQL, and blocks unsafe or out-of-scope queries.
+9. Snowflake executes the query with a timeout and query tag.
+10. The LLM generates the final answer only from returned Snowflake rows.
+11. The UI shows the answer, interpretation, evidence, and SQL.
 
 ## Local Setup
 
@@ -80,15 +80,9 @@ python scripts/build_catalog.py
 python scripts/validate_metrics.py
 ```
 
-`metadata/verified_metrics.json` contains the curated metric registry. Important verified mappings include:
+The current runtime does not send the entire Snowflake schema to the LLM. Instead, it searches Census variable metadata for the user's question, retrieves a compact set of candidate fields, and uses those retrieved tables and columns as the temporary SQL allowlist for that request.
 
-```text
-total_population -> 2020_CBG_B01.B01003e1
-population_65_plus -> SUM(B01001 age 65+ columns)
-population_by_age -> multiple B01001 age-band expressions
-```
-
-The app does not let the LLM choose substitute population universes such as veteran, adult, or civilian-only population columns.
+For example, a question about rental units retrieves renter-occupied housing-unit metadata such as tenure variables, while a population question retrieves population variables. The LLM writes SQL only from the metadata candidate set supplied by the application.
 
 Additional catalog artifacts:
 
@@ -109,7 +103,8 @@ Examples:
 - `Break California down by age.` -> age-band population breakdown using verified B01001 age variables.
 - `What about NYC?` -> inherits the previous metric and resolves NYC to the five borough county FIPS set.
 - `Which state has more no. of people greater than 65 age?` -> ranks states by the composite `population_65_plus` metric.
-- `Which state has the highest income?` -> asks for clarification instead of guessing an income definition.
+- `Which Census Block Groups have over 100 rental units?` -> retrieves renter-occupied housing-unit metadata and queries matching block groups.
+- `Which state has the highest median household income?` -> retrieves income metadata and lets SQL validation enforce the retrieved candidate fields.
 - `Which state will have the highest population in 2040?` -> refused because the catalog contains historical data, not forecasts.
 
 ## Testing
@@ -125,20 +120,42 @@ The current tests cover:
 
 - State FIPS normalization.
 - Input guardrails.
-- Verified metric selection.
-- Non-additive metric refusal.
 - SQL safety validation.
-- Ranking without a named geography.
-- Ranking follow-ups such as second place and top N.
-- Threshold filters.
-- Age breakdown planning.
-- Composite metric expressions such as population age 65+.
-- Derived-rate metrics such as poverty, broadband access, and bachelor's-degree attainment.
-- The full requested evaluator question set in `tests/golden/test_requested_question_set.py`. The planner portion runs locally; the answer-quality portion runs against Snowflake when credentials are configured.
-- NYC alias/county-set resolution.
-- Ambiguous income clarification.
-- Forecast refusal.
-- Golden question interpretation.
+- Narrow LLM agent flow.
+- Out-of-scope refusals.
+- Snowflake identifier normalization.
+- Metadata search helpers.
+- Geography lookup and enrichment.
+- Public-mode hosted LLM configuration.
+- Golden question behavior where Snowflake and hosted LLM credentials are available.
+
+## Written Reflection
+
+### Development Process and Key Architectural Decisions
+
+I started by building a curated metric assistant, then tried a very broad LLM-driven version. The broad version was flexible, but it could hallucinate columns or use the wrong Census universe. The final design keeps broad Census coverage while avoiding full-schema prompting: the app retrieves only question-relevant metadata from Snowflake and turns that retrieved candidate set into the SQL allowlist for that request.
+
+The main architecture decision was to let the LLM do language-heavy work while the application controls the data boundary. Groq-hosted `openai/gpt-oss-120b` handles scope detection, metadata search planning, SQL generation, and answer generation. The app retrieves Snowflake metadata, restricts SQL to the retrieved tables and columns, normalizes Snowflake identifiers, validates SQL, executes the query, and shows the evidence and SQL in the UI. This gives the model enough flexibility to answer varied questions without giving it unrestricted warehouse access.
+
+I also removed demo-data mode so the public app only answers from Snowflake. The frontend is Streamlit for speed and transparency, hosted publicly on Render, with a Snowflake-inspired interface so reviewers can immediately see the product direction.
+
+### What I Would Improve With More Time
+
+I would add a durable session store such as Redis or Postgres instead of process-local memory. I would also add a stronger SQL AST validator, richer observability, query cost estimation, and an audit log that records every question, model response, SQL query, Snowflake query ID, and user feedback.
+
+The next data improvement would be to make the metadata retrieval layer more semantic, with embeddings or a precomputed search index over Census labels, universes, and topics. I would also add a metadata browsing view so users can see what the assistant can answer before asking.
+
+### Edge Cases and Failure Modes
+
+Key failure modes identified include LLM rate limits, malformed JSON from the model, oversized metadata prompts, Snowflake quoting errors, missing or ambiguous geography, unsupported future-looking questions, and user requests outside the approved Census scope. The app handles many of these with retries, compacted metadata, identifier normalization, SQL validation, timeouts, and refusal paths.
+
+Some edge cases are not fully solved yet. Multi-worker deployments would lose conversation context because memory is local to the process. Very complex geography requests, joins across new Census domains, and questions requiring non-additive statistics need stronger semantic contracts before they should be supported.
+
+### Testing Approach and Future Test Additions
+
+The test suite focuses on the parts most likely to cause incorrect answers: scope handling, geography resolution, SQL safety, identifier normalization, metadata helpers, metadata ranking, and the LLM-agent flow. I also ran live smoke tests against Groq and Snowflake for population, housing/rental-unit metadata, and out-of-scope/rate-limit behavior.
+
+With more time, I would add deployed end-to-end tests that run against the public Render app, latency tests for the 60-second requirement, failure-injection tests for Snowflake and Groq outages, more adversarial prompt-injection cases, and a larger golden set covering follow-up questions and geography variations.
 
 ## Deployment
 
@@ -160,6 +177,6 @@ For production, use a read-only Snowflake role, a small dedicated warehouse, dep
 
 ## Known Limits
 
-This implementation intentionally supports a focused set of verified metrics first. Median household income uses a representative median aggregate template instead of summing block-group medians; derived rates use numerator and denominator formulas instead of averaging percentages.
+This implementation retrieves question-specific Census metadata instead of sending the whole schema to the LLM. The main limitation is that lexical metadata search can still miss the best field or rank a related field too highly, so production should use stronger semantic search, more metadata reranking rules, and SQL AST validation.
 
-Next improvements would include automatic table-grain discovery, county and tract geographies, duplicate-grain preflight checks, more verified metrics, and deployed end-to-end latency tests against the final hosting environment.
+Next improvements would include automatic table-grain discovery, county and tract geographies, duplicate-grain preflight checks, semantic metadata embeddings, and deployed end-to-end latency tests against the final hosting environment.
