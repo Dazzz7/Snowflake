@@ -29,9 +29,9 @@ with st.sidebar:
     st.subheader("Status")
     st.write("Language parsing: deterministic catalog parser")
     if settings.has_hosted_llm_config:
-        st.write(f"Gemini LLM: `{settings.llm_model}`")
+        st.write(f"Hosted LLM: `{settings.llm_model}`")
     elif settings.use_llm:
-        st.warning("USE_LLM is true, but Gemini LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY are not fully configured.")
+        st.warning("USE_LLM is true, but LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY are not fully configured.")
     st.write("Snowflake: configured" if settings.has_snowflake_credentials else "Snowflake: not configured")
     st.subheader("Try")
     examples = [

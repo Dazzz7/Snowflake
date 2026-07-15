@@ -2,7 +2,7 @@
 
 Live app: https://us-census-data-assistant.onrender.com
 
-The app has no demo-data mode and no local-model dependency. Public deployments must be configured with Snowflake credentials and a Gemini API key. Gemini is used through Google's OpenAI-compatible Gemini API endpoint.
+The app has no demo-data mode and no local-model dependency. Public deployments must be configured with Snowflake credentials and a Groq API key. Groq is used through its OpenAI-compatible API endpoint.
 
 ## Render
 
@@ -14,9 +14,9 @@ This repo includes `render.yaml`.
 
 ```text
 USE_LLM=true
-LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+LLM_BASE_URL=https://api.groq.com/openai/v1
 LLM_API_KEY=...
-LLM_MODEL=gemini-3.5-flash
+LLM_MODEL=openai/gpt-oss-120b
 LLM_TIMEOUT_SECONDS=20
 QUERY_TIMEOUT_SECONDS=30
 SNOWFLAKE_ACCOUNT=...
@@ -28,7 +28,7 @@ SNOWFLAKE_DATABASE=US_OPEN_CENSUS_DATA__NEIGHBORHOOD_INSIGHTS__FREE_DATASET
 SNOWFLAKE_SCHEMA=PUBLIC
 ```
 
-4. Get the Gemini key from Google AI Studio and store it as `LLM_API_KEY` in the deployment environment, never in git.
+4. Store the Groq key as `LLM_API_KEY` in the deployment environment, never in git.
 
 ## Streamlit Community Cloud
 

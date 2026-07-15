@@ -9,9 +9,9 @@ services:
       - key: USE_LLM
         value: "true"
       - key: LLM_BASE_URL
-        value: https://generativelanguage.googleapis.com/v1beta/openai
+        value: https://api.groq.com/openai/v1
       - key: LLM_MODEL
-        value: gemini-3.5-flash
+        value: openai/gpt-oss-120b
       - key: LLM_API_KEY
         sync: false
       - key: QUERY_TIMEOUT_SECONDS
