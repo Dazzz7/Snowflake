@@ -101,7 +101,7 @@ class NarrowLLMCensusAgent:
             )
             sql = enforce_row_limit(normalize_snowflake_identifiers(str(sql_payload.get("sql") or "").strip(), approved_tables, approved_columns))
             validation = validate_narrow_sql(sql, approved_tables, approved_columns)
-        if not validation.is_valid and getattr(self.llm, "last_error", None):
+        if not validation.is_valid and (getattr(self.llm, "last_error", None) or not sql_payload.get("sql")):
             sql_payload = self._fallback_sql_payload(resolved_question, scope, metadata, geography)
             sql = enforce_row_limit(normalize_snowflake_identifiers(str(sql_payload.get("sql") or "").strip(), approved_tables, approved_columns))
             validation = validate_narrow_sql(sql, approved_tables, approved_columns)
@@ -376,8 +376,10 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
             if result.get("error"):
                 errors.append(result["error"])
             rows.extend(result.get("results", []))
+        deduped = self._dedupe_metadata(rows)
+        prioritized = self._prioritize_metadata(deduped, resolved_question)
         return {
-            "results": self._dedupe_metadata(rows)[: max(12, min(top_k, 40))],
+            "results": prioritized[: max(12, min(top_k, 40))],
             "queries": queries,
             "error": "; ".join(errors) if errors else None,
         }
@@ -408,6 +410,8 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
 
     def _fallback_metadata_query(self, question: str) -> str:
         lowered = question.lower()
+        if self._looks_like_land_question(lowered):
+            return "land area"
         if "population" in lowered or "people" in lowered or "resident" in lowered:
             return "total population"
         if any(term in lowered for term in ["rental unit", "rental units", "renter occupied"]):
@@ -415,8 +419,9 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
         return question
 
     def _fallback_metadata_queries(self, question: str) -> list[str]:
-        queries = [self._fallback_metadata_query(question), question]
+        queries = [self._fallback_metadata_query(question)]
         queries.extend(self._metadata_query_expansions(" ".join(queries)))
+        queries.append(question)
         return list(dict.fromkeys(queries))
 
     def _fallback_geography_query(self, question: str) -> str | None:
@@ -440,6 +445,10 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
         metadata: dict[str, Any],
         geography: dict[str, Any],
     ) -> dict[str, Any]:
+        land_payload = self._fallback_land_sql_payload(resolved_question, metadata)
+        if land_payload:
+            return land_payload
+
         metric = self._best_additive_metric(metadata)
         if not metric:
             return {
@@ -493,6 +502,106 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
             "fallback": True,
             "metadata_label": metric.get("label"),
         }
+
+    def _fallback_land_sql_payload(self, resolved_question: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
+        lowered = resolved_question.lower()
+        if not self._looks_like_land_question(lowered):
+            return None
+
+        land_table = "2020_METADATA_CBG_GEOGRAPHIC_DATA"
+        land_column = "AMOUNT_LAND"
+        population_metric = self._population_metric(metadata)
+        wants_state = "state" in lowered or "states" in lowered or "every state" in lowered
+        wants_per_person = any(term in lowered for term in ["per person", "per capita", "per resident", "per population"])
+        limit = self._requested_limit(resolved_question) or (10 if any(term in lowered for term in ["top", "highest", "largest", "most"]) else 500)
+
+        if wants_per_person:
+            if not population_metric:
+                return {
+                    "sql": "",
+                    "parameters": {},
+                    "selected_columns": [land_column],
+                    "reasoning": "Land-per-person requires both land area and total population metadata, but population was not retrieved.",
+                    "fallback": True,
+                }
+            population_table = str(population_metric["table_name"]).upper()
+            population_column = str(population_metric["column_name"])
+            group_select = 'LEFT("CENSUS_BLOCK_GROUP", 2) AS state_fips' if wants_state else "'United States' AS geography"
+            group_by = "GROUP BY state_fips" if wants_state else ""
+            join_key = "state_fips" if wants_state else "geography"
+            order_by = "ORDER BY land_per_person DESC" if any(term in lowered for term in ["top", "highest", "largest", "most"]) else f"ORDER BY {join_key}"
+            sql = f"""
+WITH land AS (
+    SELECT {group_select}, SUM("{land_column}") AS total_land_area
+    FROM "{settings.snowflake_database}"."{settings.snowflake_schema}"."{land_table}"
+    {group_by}
+),
+population AS (
+    SELECT {group_select}, SUM("{population_column}") AS total_population
+    FROM "{settings.snowflake_database}"."{settings.snowflake_schema}"."{population_table}"
+    {group_by}
+)
+SELECT
+    land.{join_key},
+    land.total_land_area,
+    population.total_population,
+    land.total_land_area / NULLIF(population.total_population, 0) AS land_per_person
+FROM land
+JOIN population USING ({join_key})
+{order_by}
+LIMIT {max(1, min(limit, 500))}
+""".strip()
+            return {
+                "sql": sql,
+                "parameters": {},
+                "selected_columns": [land_column, population_column],
+                "reasoning": "Metadata fallback combined retrieved land-area metadata with retrieved total-population metadata to compute land per person.",
+                "fallback": True,
+                "metadata_label": "Land area per person = SUM(AMOUNT_LAND) / SUM(total population)",
+            }
+
+        if wants_state:
+            sql = f"""
+SELECT
+    LEFT("CENSUS_BLOCK_GROUP", 2) AS state_fips,
+    SUM("{land_column}") AS total_land_area
+FROM "{settings.snowflake_database}"."{settings.snowflake_schema}"."{land_table}"
+GROUP BY state_fips
+ORDER BY total_land_area DESC
+LIMIT {max(1, min(limit, 500))}
+""".strip()
+            return {
+                "sql": sql,
+                "parameters": {},
+                "selected_columns": [land_column],
+                "reasoning": "Metadata fallback aggregated retrieved land-area metadata by state FIPS and ranked by total land area.",
+                "fallback": True,
+                "metadata_label": "Land area from AMOUNT_LAND",
+            }
+
+        sql = f'SELECT SUM("{land_column}") AS total_land_area FROM "{settings.snowflake_database}"."{settings.snowflake_schema}"."{land_table}"'
+        return {
+            "sql": sql,
+            "parameters": {},
+            "selected_columns": [land_column],
+            "reasoning": "Metadata fallback summed retrieved land-area metadata.",
+            "fallback": True,
+            "metadata_label": "Land area from AMOUNT_LAND",
+        }
+
+    def _population_metric(self, metadata: dict[str, Any]) -> dict[str, Any] | None:
+        for row in metadata.get("results", []):
+            label = str(row.get("label") or "").lower()
+            column = str(row.get("column_name") or "")
+            if column.lower() == "b01003e1" or ("total population" in label and re.search(r"e\d+$", column, re.IGNORECASE)):
+                return row
+        return None
+
+    def _requested_limit(self, question: str) -> int | None:
+        match = re.search(r"\btop\s+([0-9]{1,3})\b", question, re.IGNORECASE)
+        if not match:
+            return None
+        return int(match.group(1))
 
     def _best_additive_metric(self, metadata: dict[str, Any]) -> dict[str, Any] | None:
         for row in metadata.get("results", []):
@@ -618,12 +727,41 @@ If rows include STATE_NAME, use it instead of only FIPS. Keep the answer compact
             deduped.append(row)
         return deduped
 
+    def _prioritize_metadata(self, rows: list[dict[str, Any]], question: str) -> list[dict[str, Any]]:
+        lowered = question.lower()
+
+        def score(row: dict[str, Any]) -> int:
+            table = str(row.get("table_name") or "").upper()
+            column = str(row.get("column_name") or "").upper()
+            label = str(row.get("label") or "").lower()
+            value = 0
+            if self._looks_like_land_question(lowered):
+                if table == "2020_METADATA_CBG_GEOGRAPHIC_DATA":
+                    value += 100
+                if column == "AMOUNT_LAND":
+                    value += 80
+            if any(term in lowered for term in ["per person", "per capita", "per resident", "population", "people"]):
+                if column == "B01003E1":
+                    value += 100
+                if "total population" in label:
+                    value += 60
+            return value
+
+        return sorted(rows, key=score, reverse=True)
+
     def _metadata_query_expansions(self, text: str) -> list[str]:
         normalized = text.lower().replace("_", " ")
         expansions = []
         if any(term in normalized for term in ["rental unit", "rental housing", "renter occupied", "rental units"]):
             expansions.append("renter occupied housing units tenure")
+        if self._looks_like_land_question(normalized):
+            expansions.append("land area")
+        if self._looks_like_land_question(normalized) and any(term in normalized for term in ["per person", "per capita", "people", "population", "resident"]):
+            expansions.append("total population")
         return expansions
+
+    def _looks_like_land_question(self, lowered_question: str) -> bool:
+        return any(term in lowered_question for term in ["land", "area", "acre", "sq mile", "square mile", "volume"])
 
     def _short_label(self, label: str) -> str:
         for prefix in [

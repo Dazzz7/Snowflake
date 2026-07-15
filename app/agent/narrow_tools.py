@@ -26,6 +26,9 @@ GEOGRAPHY_COLUMNS = {
 def search_metadata(query: str, top_k: int = 40) -> dict[str, Any]:
     top_k = max(1, min(top_k, 80))
     rows: list[dict[str, Any]] = []
+    if _looks_like_land_or_geography(query):
+        rows.extend(_geography_metadata_rows(query))
+
     result = search_variable_metadata(query, year=2020, limit=max(top_k, 60))
     if not result.error:
         for row in result.rows:
@@ -36,23 +39,6 @@ def search_metadata(query: str, top_k: int = 40) -> dict[str, Any]:
                 continue
             rows.append(_metadata_row(row))
 
-    if _looks_like_land_or_geography(query):
-        for column, label in GEOGRAPHY_COLUMNS.items():
-            if column == "CENSUS_BLOCK_GROUP" or _column_matches_query(column, label, query):
-                rows.append(
-                    {
-                        "table_name": "2020_METADATA_CBG_GEOGRAPHIC_DATA",
-                        "column_name": column,
-                        "data_type": "NUMBER" if column != "CENSUS_BLOCK_GROUP" else "TEXT",
-                        "concept": "Census geography",
-                        "label": label,
-                        "universe": "Census Block Groups",
-                        "year": 2020,
-                        "category": "land geography",
-                        "geography_grain": "Census Block Group",
-                        "geography_column": "CENSUS_BLOCK_GROUP",
-                    }
-                )
     return {"results": _dedupe_metadata_rows(rows)[:top_k], "error": result.error}
 
 
@@ -212,6 +198,27 @@ def _column_matches_query(column: str, label: str, query: str) -> bool:
     words = set(re.findall(r"[a-z0-9]+", query.lower()))
     haystack = f"{column} {label}".lower()
     return any(word in haystack for word in words)
+
+
+def _geography_metadata_rows(query: str) -> list[dict[str, Any]]:
+    rows = []
+    for column, label in GEOGRAPHY_COLUMNS.items():
+        if column == "CENSUS_BLOCK_GROUP" or _column_matches_query(column, label, query):
+            rows.append(
+                {
+                    "table_name": GEOGRAPHY_TABLE,
+                    "column_name": column,
+                    "data_type": "NUMBER" if column != "CENSUS_BLOCK_GROUP" else "TEXT",
+                    "concept": "Census geography",
+                    "label": label,
+                    "universe": "Census Block Groups",
+                    "year": 2020,
+                    "category": "land geography",
+                    "geography_grain": "Census Block Group",
+                    "geography_column": "CENSUS_BLOCK_GROUP",
+                }
+            )
+    return rows
 
 
 def _is_census_data_table(table: str) -> bool:

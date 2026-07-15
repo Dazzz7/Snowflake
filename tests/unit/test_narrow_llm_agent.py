@@ -145,3 +145,91 @@ def test_llm_rate_limit_falls_back_to_metadata_sql(monkeypatch):
     assert response.interpretation["scope_decision"]["llm_scope_fallback"] is True
     assert response.interpretation["sql_payload"]["fallback"] is True
     assert 'SUM("B01003e1")' in response.sql
+
+
+def test_llm_rate_limit_falls_back_to_land_per_person_by_state(monkeypatch):
+    def fake_search_metadata(query, top_k=30):
+        rows = []
+        if "land" in query.lower() or "area" in query.lower():
+            rows.append(
+                {
+                    "table_name": "2020_METADATA_CBG_GEOGRAPHIC_DATA",
+                    "column_name": "AMOUNT_LAND",
+                    "label": "Land area",
+                    "universe": "Census Block Groups",
+                }
+            )
+        if "population" in query.lower():
+            rows.append(
+                {
+                    "table_name": "2020_CBG_B01",
+                    "column_name": "B01003e1",
+                    "label": "Estimate: TOTAL POPULATION: Total population: Total",
+                    "universe": "Total population",
+                }
+            )
+        return {"results": rows}
+
+    monkeypatch.setattr("app.agent.narrow_llm_agent.search_metadata", fake_search_metadata)
+    monkeypatch.setattr(
+        "app.agent.narrow_llm_agent.describe_table",
+        lambda table: {
+            "table_name": table,
+            "columns": [
+                {"column_name": "CENSUS_BLOCK_GROUP", "label": "Census Block Group identifier"},
+                {"column_name": "AMOUNT_LAND", "label": "Land area"},
+                {"column_name": "B01003e1", "label": "Estimate: TOTAL POPULATION: Total population: Total"},
+            ],
+        },
+    )
+    monkeypatch.setattr("app.agent.narrow_llm_agent.lookup_geography", lambda query: {"resolved": True, "name": "United States", "type": "country"})
+    monkeypatch.setattr(
+        "app.agent.narrow_llm_agent.execute_sql",
+        lambda sql, parameters=None: QueryResult(rows=[{"STATE_FIPS": "02", "TOTAL_LAND_AREA": 1000, "TOTAL_POPULATION": 10, "LAND_PER_PERSON": 100}], columns=[], query_id="q-land-person"),
+    )
+
+    response = NarrowLLMCensusAgent(llm=FailingLLM()).answer("give me land per person in every state of usa", "land-person-fallback")
+
+    assert response.status == "success"
+    assert "land_per_person" in response.sql
+    assert 'SUM("AMOUNT_LAND")' in response.sql
+    assert 'SUM("B01003e1")' in response.sql
+    assert "JOIN population" in response.sql
+
+
+def test_llm_rate_limit_falls_back_to_top_states_by_land(monkeypatch):
+    monkeypatch.setattr(
+        "app.agent.narrow_llm_agent.search_metadata",
+        lambda query, top_k=30: {
+            "results": [
+                {
+                    "table_name": "2020_METADATA_CBG_GEOGRAPHIC_DATA",
+                    "column_name": "AMOUNT_LAND",
+                    "label": "Land area",
+                    "universe": "Census Block Groups",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        "app.agent.narrow_llm_agent.describe_table",
+        lambda table: {
+            "table_name": table,
+            "columns": [
+                {"column_name": "CENSUS_BLOCK_GROUP", "label": "Census Block Group identifier"},
+                {"column_name": "AMOUNT_LAND", "label": "Land area"},
+            ],
+        },
+    )
+    monkeypatch.setattr("app.agent.narrow_llm_agent.lookup_geography", lambda query: {"resolved": False})
+    monkeypatch.setattr(
+        "app.agent.narrow_llm_agent.execute_sql",
+        lambda sql, parameters=None: QueryResult(rows=[{"STATE_FIPS": "02", "TOTAL_LAND_AREA": 1000}], columns=[], query_id="q-land-top"),
+    )
+
+    response = NarrowLLMCensusAgent(llm=FailingLLM()).answer("top 10 states by land volume", "land-top-fallback")
+
+    assert response.status == "success"
+    assert 'SUM("AMOUNT_LAND")' in response.sql
+    assert "GROUP BY state_fips" in response.sql
+    assert "LIMIT 10" in response.sql
