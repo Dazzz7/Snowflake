@@ -3,6 +3,7 @@
 Interactive chat agent for answering natural-language questions grounded in the Snowflake Marketplace US Open Census dataset.
 
 Live app: https://us-census-data-assistant.onrender.com
+Video: https://drive.google.com/file/d/1TeupMBi6Lb7Zv2bXHwQ8iGQgnkFqxHaM/view?usp=drive_link
 
 The central design choice is that Groq-hosted GPT-OSS is used for scope detection, metadata selection, SQL planning, and answer generation, while the application constrains the model to approved Census tables, validates SQL, executes only against Snowflake, and exposes the evidence back to the user.
 
